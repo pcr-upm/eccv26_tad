@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-source /opt/conda/etc/profile.d/conda.sh
+eval "$(/home/username/conda/bin/conda shell.bash hook)"
 conda activate eccv26
 
 pip install -r requirements.txt --no-build-isolation

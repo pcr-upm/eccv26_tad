@@ -19,7 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV TZ=Europe/Madrid
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
-RUN apt update && apt-get update && apt-get install ffmpeg libsm6 libxext6  build-essential git wget software-properties-common libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libavdevice-dev -y
+RUN apt update && apt-get update && apt-get install ffmpeg libsm6 libxext6 build-essential git wget software-properties-common libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libavdevice-dev -y
 RUN mkdir /home/username
 WORKDIR /home/username
 COPY --from=intermediate /eccv26_tad /home/username/eccv26_tad
