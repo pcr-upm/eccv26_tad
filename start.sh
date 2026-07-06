@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-set -e
-eval "$(/home/username/conda/bin/conda shell.bash hook)"
-conda activate eccv26
-
 pip install -r requirements.txt --no-build-isolation
 mim install "mmpose>=1.1.0" --no-build-isolation
 rm -rf decord
