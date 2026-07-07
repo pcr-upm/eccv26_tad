@@ -27,6 +27,38 @@ def update_workdir(cfg, exp_id, gpu_num):
     return cfg
 
 
+def override_dataset_paths(
+    cfg, ann_file=None, class_map=None, data_path=None, block_list=None, external_cls_path=None
+):
+    """Override dataset path settings (annotation file, class map, data root, block list,
+    external classifier path) across every split (train/val/test) and the evaluation /
+    post_processing configs, since configs duplicate these paths into each dict rather
+    than referencing a single shared value.
+    """
+    path_overrides = {
+        "ann_file": ann_file,
+        "class_map": class_map,
+        "data_path": data_path,
+        "block_list": block_list,
+    }
+    for split_cfg in cfg.dataset.values():
+        for key, value in path_overrides.items():
+            if value is not None and key in split_cfg:
+                split_cfg[key] = value
+
+    if ann_file is not None and "evaluation" in cfg and "ground_truth_filename" in cfg.evaluation:
+        cfg.evaluation.ground_truth_filename = ann_file
+
+    if block_list is not None and "evaluation" in cfg and "blocked_videos" in cfg.evaluation:
+        cfg.evaluation.blocked_videos = block_list
+
+    if external_cls_path is not None and "post_processing" in cfg and "external_cls" in cfg.post_processing:
+        if cfg.post_processing.external_cls is not None:
+            cfg.post_processing.external_cls.path = external_cls_path
+
+    return cfg
+
+
 def create_folder(folder_path):
     dir_name = os.path.expanduser(folder_path)
     if not os.path.exists(dir_name):
