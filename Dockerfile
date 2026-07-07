@@ -49,6 +49,6 @@ RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
     git checkout v2.5.4 && \
     cd csrc/layer_norm && \
     MAX_JOBS=16 conda run -n eccv26 pip install . --no-build-isolation
-RUN conda run -n eccv26 pip install --no-cache-dir timm==1.0.24 --no-build-isolation
+RUN conda run -n eccv26 pip install --no-cache-dir images-framework torchinfo timm==1.0.24 --no-build-isolation
 ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
 RUN ln -s /usr/lib/x86_64-linux-gnu/libnvcuvid.so.1 /usr/local/cuda/libnvcuvid.so

@@ -27,10 +27,18 @@ usage: Alignment --database DATABASE
 
 * Use the --database option to select the database model.
 ```
-usage: ECCV26TAD [--gpu GPU] [--batch-size BATCH_SIZE] [--epochs EPOCHS] [--patience PATIENCE]
+usage: ECCV26TAD [--gpu GPU] [--config FILE] [--ckpt CKPT] [--thresh THRESH] [--topk TOPK]
 ```
 
 * Use the --gpu option to set the GPU identifier (negative value indicates CPU mode).
+
+* Use the --config option to set the path to config file.
+
+* Use the --ckpt option to set the checkpoint path.
+
+* Use the --thresh option to only show predictions with score above this threshold.
+
+* Use the --topk option to show at most this many predictions (sorted by score).
 ```
-> python test/eccv26_tad_test.py --input-data test/example.jpg --database affectnet --gpu 0 --save-image
+> python test/eccv26_tad_test.py --input-data test/example.mp4 --config configs/vitsparse/thumos/e2e_thumos_videomae_b_768x1_160_sparse_adapter.py --ckpt data/vitb_thumos_best.pth --topk 10 --database thumos --gpu 0
 ```
