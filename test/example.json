@@ -1,63 +1,46 @@
 {
-  "images": [
+  "video": [
     {
-      "id": 8,
-      "file_name": "example.jpg",
-      "width": 405,
-      "height": 608,
+      "id": 1556,
+      "file_name": "example.mp4",
+      "width": 320,
+      "height": 180,
+      "duration": 103.234,
+      "frame": 3094,
       "date_captured": ""
     }
   ],
-  "database": "raf",
+  "database": "thumos",
+  "class_map": [
+    "BaseballPitch",
+    "BasketballDunk",
+    "Billiards",
+    "CleanAndJerk",
+    "CliffDiving",
+    "CricketBowling",
+    "CricketShot",
+    "Diving",
+    "FrisbeeCatch",
+    "GolfSwing",
+    "HammerThrow",
+    "HighJump",
+    "JavelinThrow",
+    "LongJump",
+    "PoleVault",
+    "Shotput",
+    "SoccerPenalty",
+    "TennisSwing",
+    "ThrowDiscus",
+    "VolleyballSpiking"
+  ],
   "annotations": [
     {
-      "id": "0008",
-      "image_id": 0,
-      "bbox": {
-        "pt1_x": 109.995773,
-        "pt1_y": 121.239365,
-        "pt2_x": 251.488815,
-        "pt2_y": 308.514191
-      },
-      "landmarks": [
-        {
-          "label": 101,
-          "pos": [174.11, 181.861],
-          "visible": true,
-          "confidence": -1.0
-        },
-        {
-          "label": 102,
-          "pos": [234.565, 189.254],
-          "visible": true,
-          "confidence": -1.0
-        },
-        {
-          "label": 17,
-          "pos": [213.198, 217.494],
-          "visible": true,
-          "confidence": -1.0
-        },
-        {
-          "label": 20,
-          "pos": [180.01, 270.473],
-          "visible": true,
-          "confidence": -1.0
-        },
-        {
-          "label": 21,
-          "pos": [216.096, 273.584],
-          "visible": true,
-          "confidence": -1.0
-        }
-      ],
-      "iscrowd": 0,
-      "attributes": {
-        "gender": "0",
-        "race": "0",
-        "age": "2",
-        "emotion": "1"
-      }
+      "segment": [53.0, 55.3],
+      "label": "SoccerPenalty"
+    },
+    {
+      "segment": [78.2, 83.8],
+      "label": "SoccerPenalty"
     }
   ]
 }

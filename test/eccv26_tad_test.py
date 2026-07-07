@@ -10,12 +10,13 @@ import cv2
 import json
 import torch
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
-from mmengine.config import Config, DictAction
+from mmengine.config import Config
+from mmengine.dataset import Compose
 from opentad.models import build_detector
-from opentad.datasets import build_dataset
 from opentad.datasets.builder import collate
+from opentad.datasets import ThumosSlidingDataset
 from opentad.models.utils.post_processing import batched_nms
-from opentad.utils import (set_seed, remap_legacy_sparse_conv_weights, override_dataset_paths)
+from opentad.utils import (set_seed, remap_legacy_sparse_conv_weights)
 
 
 def parse_options():
@@ -24,24 +25,14 @@ def parse_options():
     """
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input-data', '-d', dest='input_data', required=False, default='',
-                        help='Input as image, directory, camera or video file.')
+    parser.add_argument('--input-data', '-d', dest='input_data', required=True, default='',
+                        help='Input as image video file.')
     parser.add_argument("config", metavar="FILE", type=str, 
                         help="path to config file")
-    parser.add_argument("--video", type=str, required=True,
-                        help="video name (id) to run inference on, e.g. video_test_0000004")
     parser.add_argument("--checkpoint", type=str, default="none", 
                         help="the checkpoint path")
     parser.add_argument("--seed", type=int, default=42, 
                         help="random seed")
-    parser.add_argument("--cfg-options", nargs="+", action=DictAction, 
-                        help="override settings")
-    parser.add_argument("--ann-file", type=str, default=None,
-                        help="override the annotation file path for all dataset splits and evaluation")
-    parser.add_argument("--class-map", type=str, default=None,
-                        help="override the class map / category index file path for all dataset splits")
-    parser.add_argument("--data-root", type=str, default=None,
-                        help="override the raw video / feature data root path for all dataset splits")
     parser.add_argument("--device", type=str, default="cuda:0",
                         help="device to run inference on, e.g. cuda:0 or cpu")
     parser.add_argument("--score-thresh", type=float, default=0.0,
@@ -56,37 +47,146 @@ def parse_options():
     print(parser.format_usage())
     input_data = args.input_data
     config = args.config
-    video = args.video
     checkpoint = args.checkpoint
     seed = args.seed
-    cfg_options = args.cfg_options
-    ann_file = args.ann_file
-    class_map = args.class_map
-    data_root = args.data_root
     device = args.device
     score_thresh = args.score_thresh
     topk = args.topk    
     show_viewer = args.show_viewer
     save_image = args.save_image
-    return unknown, input_data, config, video, checkpoint, seed, cfg_options, ann_file, class_map, data_root, device, score_thresh, topk, show_viewer, save_image
+    return unknown, input_data, config, checkpoint, seed, device, score_thresh, topk, show_viewer, save_image
 
 
-def load_ground_truth(ann_file, video_name):
+def load_ground_truth(ann_file):
     """
-    Read the annotations of a single video directly from the annotation json.
+    Read the annotations of a single video directly from the matching JSON file.
     """
-    with open(ann_file, "r") as f:
-        database = json.load(f)["database"]
-    if video_name not in database:
-        return None, []
-    video_info = database[video_name]
+    with open(ann_file, "r", encoding="utf-8") as ifs:
+        payload = json.load(ifs)
+    video_entries = payload.get("video", [])
+    annotations = payload.get("annotations", [])
+    class_map = payload.get("class_map", [])
+    if isinstance(video_entries, list) and video_entries:
+        video_info = video_entries[0]
+        video_info = dict(video_info)
+        video_info.setdefault("duration", payload.get("duration"))
+        video_info.setdefault("frame", payload.get("frame"))
+        video_info.setdefault("subset", payload.get("database"))
+    else:
+        video_info = None
     gt = []
-    for anno in video_info.get("annotations", []):
-        if anno["label"] == "Ambiguous":
+    for anno in annotations:
+        if anno.get("label") == "Ambiguous":
             continue
         gt.append(dict(segment=anno["segment"], label=anno["label"]))
     gt.sort(key=lambda x: x["segment"][0])
-    return video_info, gt
+    if video_info is None and not gt:
+        return None, [], class_map
+    return video_info, gt, class_map
+
+
+class ExampleSlidingDataset(ThumosSlidingDataset):
+    """
+    Single-video sliding-window dataset for inference on one example clip.
+
+    It reuses the exact test pipeline / sliding-window splitting / __getitem__ of
+    ``ThumosSlidingDataset`` (frame decoding, resize, center crop, normalization,
+    NCTHW formatting and the ``metas`` expected by the post-processing), but skips
+    reading the whole THUMOS annotation database: the single video info comes
+    straight from the matching JSON file (see ``load_ground_truth``).
+    """
+
+    def __init__(self, video_name, video_info, data_path, pipeline, class_map,
+                 window_size, feature_stride=4, sample_stride=1,
+                 window_overlap_ratio=0.5):
+        # NOTE: we intentionally do NOT call super().__init__(), because the base
+        # SlidingWindowDataset.__init__ reads the full annotation database. Instead
+        # we set up only the attributes needed by split_video_to_windows /
+        # __getitem__ / the pipeline for this single example video.
+        self.data_path = data_path
+        self.block_list = None
+        self.ann_file = None
+        self.subset_name = None
+        self.logger = print
+        self.class_map = class_map
+        self.class_agnostic = False
+        self.filter_gt = False
+        self.test_mode = True
+        self.pipeline = Compose(pipeline)
+
+        # feature settings
+        self.feature_stride = int(feature_stride)
+        self.sample_stride = int(sample_stride)
+        self.offset_frames = 0
+        self.snippet_stride = int(feature_stride * sample_stride)
+        self.fps = -1
+
+        # window settings
+        self.window_size = int(window_size)
+        self.window_stride = int(window_size * (1 - window_overlap_ratio))
+        self.ioa_thresh = 0.75
+        self.video_split_ratio = None
+
+        # thumos-specific attributes (keypoints are unused for the example)
+        self.skeleton_data_path_2d = None
+        self.preprocessed_skeleton_path = None
+        self.skeleton_cache = {}
+        self.debug = False
+        self._aligned_cache = {}
+        self._file_exists_cache = {}
+
+        # build the sliding windows for this single video (test_mode -> no gt)
+        self.data_list = self.split_video_to_windows(video_name, video_info, {})
+
+
+def _probe_video_frame_duration(video_path):
+    """
+    Fallback to read frame count and duration directly from the video file when
+    they are missing from the annotation JSON.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(f"Cannot open video file: {video_path}")
+    frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    cap.release()
+    duration = frame / fps if fps > 0 else 0.0
+    return frame, duration
+
+
+def build_example_dataset(cfg, input_data, video_info):
+    """
+    Build a dataset containing only the requested example video, reusing the real
+    sliding-window test pipeline defined in the config.
+    """
+    test_cfg = cfg.dataset.test
+
+    video_name = os.path.splitext(os.path.basename(input_data))[0]
+    data_path = os.path.dirname(os.path.abspath(input_data))
+
+    # ensure frame count / duration are available for the sliding-window splitting
+    video_info = dict(video_info or {})
+    if not video_info.get("frame") or not video_info.get("duration"):
+        frame, duration = _probe_video_frame_duration(input_data)
+        video_info.setdefault("frame", frame)
+        video_info.setdefault("duration", duration)
+        if not video_info.get("frame"):
+            video_info["frame"] = frame
+        if not video_info.get("duration"):
+            video_info["duration"] = duration
+
+    return ExampleSlidingDataset(
+        video_name=video_name,
+        video_info=video_info,
+        data_path=data_path,
+        pipeline=test_cfg.pipeline,
+        class_map=[],  # unused in test_mode; external classifier is passed to the model
+        window_size=getattr(test_cfg, "window_size", 768),
+        feature_stride=getattr(test_cfg, "feature_stride", 4),
+        sample_stride=getattr(test_cfg, "sample_stride", 1),
+        window_overlap_ratio=getattr(test_cfg, "window_overlap_ratio", 0.5),
+    )
 
 
 def nms_single_video(predictions, nms_cfg):
@@ -102,18 +202,10 @@ def nms_single_video(predictions, nms_cfg):
             class_idx.append(data["label"])
         labels.append(class_idx.index(data["label"]))
     labels = torch.Tensor(labels)
-
     segments, scores, labels = batched_nms(segments, scores, labels, **nms_cfg)
-
     results = []
     for segment, label, score in zip(segments, labels, scores):
-        results.append(
-            dict(
-                segment=[round(seg.item(), 2) for seg in segment],
-                label=class_idx[int(label.item())],
-                score=round(score.item(), 4),
-            )
-        )
+        results.append(dict(segment=[round(seg.item(), 2) for seg in segment], label=class_idx[int(label.item())], score=round(score.item(), 4),))
     return results
 
 
@@ -122,35 +214,35 @@ def main():
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test script.
     """
     print('OpenCV ' + cv2.__version__)
-    unknown, input_data, config, video, checkpoint, seed, cfg_options, ann_file, class_map, data_root, device, score_thresh, topk, show_viewer, save_image = parse_options()
+    unknown, input_data, config, checkpoint, seed, device, score_thresh, topk, show_viewer, save_image = parse_options()
 
     # load config
     cfg = Config.fromfile(config)
-    if cfg_options is not None:
-        cfg.merge_from_dict(cfg_options)
-    cfg = override_dataset_paths(
-        cfg,
-        ann_file=ann_file,
-        class_map=class_map,
-        data_path=data_root,
-    )
 
     set_seed(seed)
     device = torch.device(device if torch.cuda.is_available() or "cpu" in device else "cpu")
     print(f"Using device: {device}")
 
-    # build test dataset and keep only the windows belonging to the requested video
-    test_dataset = build_dataset(cfg.dataset.test)
-    print(test_dataset.data_list)
-    test_dataset.data_list = [d for d in test_dataset.data_list if d[0] == video]
-    if len(test_dataset.data_list) == 0:
+    # ground truth
+    video_info, ground_truth, external_cls = load_ground_truth(os.path.splitext(input_data)[0]+'.json')
+
+    # the external classifier maps predicted class indices -> category names, so it
+    # must list ALL training classes in the same (sorted) order used at training time
+    num_classes = cfg.model["rpn_head"]["num_classes"]
+    if len(external_cls) != num_classes:
         raise ValueError(
-            f"Video '{video}' not found in the '{cfg.dataset.test.subset_name}' subset. "
-            f"Check the video name and that it belongs to this subset."
+            f"'class_map' in the example JSON has {len(external_cls)} entries but the "
+            f"model predicts {num_classes} classes. It must list all {num_classes} "
+            f"training classes in sorted order (see category_idx.txt used at training)."
         )
-    print(f"Video '{video}' split into {len(test_dataset.data_list)} sliding windows.")
+
+    # build a dataset containing only the requested example video, reusing the
+    # real sliding-window test pipeline from the config
+    test_dataset = build_example_dataset(cfg, input_data, video_info)
+    print(f"Loaded example video '{os.path.basename(input_data)}' as {len(test_dataset)} window(s).")
 
     # build model
+    cfg.model['backbone']['custom']['pretrain'] = 'data/'+cfg.model['backbone']['custom']['pretrain']
     model = build_detector(cfg.model)
     model = model.to(device)
 
@@ -178,7 +270,6 @@ def main():
 
     # this is a sliding window dataset, so NMS is applied after merging windows
     cfg.post_processing.sliding_window = True
-    external_cls = test_dataset.class_map  # list: class index -> class name
 
     # inference, window by window
     model.eval()
@@ -206,18 +297,15 @@ def main():
                 result_dict[k] = v
 
     # merge windows with NMS (same as sliding-window evaluation)
-    predictions = result_dict.get(video, [])
+    video_name = os.path.splitext(os.path.basename(input_data))[0]
+    predictions = result_dict.get(video_name, result_dict.get(os.path.basename(input_data), result_dict.get(input_data, [])))
     if len(predictions) > 0 and cfg.post_processing.nms is not None:
         predictions = nms_single_video(predictions, dict(cfg.post_processing.nms))
     predictions.sort(key=lambda x: x["score"], reverse=True)
 
-    # ground truth
-    ann_file = ann_file if ann_file is not None else cfg.dataset.test.ann_file
-    video_info, ground_truth = load_ground_truth(ann_file, video)
-
     # ---- report ----
     print("\n" + "=" * 70)
-    print(f"VIDEO: {video}")
+    print(f"VIDEO: {input_data}")
     if video_info is not None:
         print(f"  duration: {video_info.get('duration', '?')} s | frames: {video_info.get('frame', '?')}")
     print("=" * 70)
