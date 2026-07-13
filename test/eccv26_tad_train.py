@@ -30,6 +30,7 @@ from opentad.cores import (
 from opentad.utils import (
     set_seed,
     update_workdir,
+    override_dataset_paths,
     create_folder,
     save_config,
     setup_logger,
@@ -66,6 +67,26 @@ def parse_args():
     parser.add_argument(
         "--cfg-options", nargs="+", action=DictAction, help="override settings"
     )
+    parser.add_argument(
+        "--ann-file", type=str, default=None,
+        help="override the annotation file path for all dataset splits and evaluation",
+    )
+    parser.add_argument(
+        "--class-map", type=str, default=None,
+        help="override the class map / category index file path for all dataset splits",
+    )
+    parser.add_argument(
+        "--data-root", type=str, default=None,
+        help="override the raw video / feature data root path for all dataset splits",
+    )
+    parser.add_argument(
+        "--block-list", type=str, default=None,
+        help="override the block list file path for all dataset splits",
+    )
+    parser.add_argument(
+        "--external-cls-path", type=str, default=None,
+        help="override the external classifier (post_processing.external_cls) path",
+    )
     args = parser.parse_args()
     return args
 
@@ -81,6 +102,14 @@ def main():
     args.id = run_id
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
+    cfg = override_dataset_paths(
+        cfg,
+        ann_file=args.ann_file,
+        class_map=args.class_map,
+        data_path=args.data_root,
+        block_list=args.block_list,
+        external_cls_path=args.external_cls_path,
+    )
 
     # DDP init
     args.local_rank = int(os.environ["LOCAL_RANK"])
@@ -110,6 +139,12 @@ def main():
     if args.wandb and args.rank == 0:
         run_name = os.path.basename(args.config).split(".")[0] + f"_id{args.id}"
         wandb.init(project=args.project, name=run_name, config=cfg.to_dict())
+        # Track the PEAK mAP in the run summary, not the last logged value. The
+        # end-of-training eval can be lower (or 0 if training diverged late), and
+        # a bayes sweep optimizes the summary value -- without this it would treat
+        # a run that peaked high but ended low as a poor config.
+        for _m in ["average_mAP", "mAP@0.3", "mAP@0.4", "mAP@0.5", "mAP@0.6", "mAP@0.7"]:
+            wandb.define_metric(_m, summary="max")
 
     # build dataset
     train_dataset = build_dataset(cfg.dataset.train, default_args=dict(logger=logger))

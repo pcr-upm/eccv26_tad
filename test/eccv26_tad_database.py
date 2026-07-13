@@ -15,11 +15,19 @@ import argparse
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
+from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from mmengine.config import Config, DictAction
 from opentad.models import build_detector
 from opentad.datasets import build_dataset, build_dataloader
 from opentad.cores import eval_one_epoch
-from opentad.utils import update_workdir, set_seed, create_folder, setup_logger
+from opentad.utils import (
+    update_workdir,
+    set_seed,
+    create_folder,
+    setup_logger,
+    remap_legacy_sparse_conv_weights,
+    override_dataset_paths,
+)
 
 
 def parse_args():
@@ -30,6 +38,26 @@ def parse_args():
     parser.add_argument("--id", type=int, default=0, help="repeat experiment id")
     parser.add_argument("--not_eval", action="store_true", help="whether to not to eval, only do inference")
     parser.add_argument("--cfg-options", nargs="+", action=DictAction, help="override settings")
+    parser.add_argument(
+        "--ann-file", type=str, default=None,
+        help="override the annotation file path for all dataset splits and evaluation",
+    )
+    parser.add_argument(
+        "--class-map", type=str, default=None,
+        help="override the class map / category index file path for all dataset splits",
+    )
+    parser.add_argument(
+        "--data-root", type=str, default=None,
+        help="override the raw video / feature data root path for all dataset splits",
+    )
+    parser.add_argument(
+        "--block-list", type=str, default=None,
+        help="override the block list file path for all dataset splits",
+    )
+    parser.add_argument(
+        "--external-cls-path", type=str, default=None,
+        help="override the external classifier (post_processing.external_cls) path",
+    )
     args = parser.parse_args()
     return args
 
@@ -41,6 +69,14 @@ def main():
     cfg = Config.fromfile(args.config)
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
+    cfg = override_dataset_paths(
+        cfg,
+        ann_file=args.ann_file,
+        class_map=args.class_map,
+        data_path=args.data_root,
+        block_list=args.block_list,
+        external_cls_path=args.external_cls_path,
+    )
 
     # DDP init
     args.local_rank = int(os.environ["LOCAL_RANK"])
@@ -73,6 +109,7 @@ def main():
     )
 
     # build model
+    cfg.model['backbone']['custom']['pretrain'] = 'data/' + cfg.model['backbone']['custom']['pretrain']
     model = build_detector(cfg.model)
 
     # DDP
@@ -96,11 +133,22 @@ def main():
 
         # Model EMA
         use_ema = getattr(cfg.solver, "ema", False)
+        state_dict = checkpoint["state_dict_ema"] if use_ema else checkpoint["state_dict"]
+        # Older checkpoints may or may not carry the DDP "module." prefix depending on
+        # how EMA/the model were wrapped at save time; normalize before comparing/loading.
+        consume_prefix_in_state_dict_if_present(state_dict, prefix="module.")
+        state_dict = remap_legacy_sparse_conv_weights(state_dict, model.module.state_dict())
+        missing, unexpected = model.module.load_state_dict(state_dict, strict=False)
+        if missing:
+            logger.info(f"Missing keys in checkpoint: {len(missing)} keys")
+            for k in missing:
+                logger.info(f"  - {k}")
+        if unexpected:
+            logger.info(f"Unexpected keys in checkpoint: {len(unexpected)} keys")
+            for k in unexpected:
+                logger.info(f"  - {k}")
         if use_ema:
-            model.load_state_dict(checkpoint["state_dict_ema"])
             logger.info("Using Model EMA...")
-        else:
-            model.load_state_dict(checkpoint["state_dict"])
 
     # AMP: automatic mixed precision
     use_amp = getattr(cfg.solver, "amp", False)
