@@ -12,35 +12,35 @@
   ],
   "database": "thumos",
   "class_map": [
-    "BaseballPitch",
-    "BasketballDunk",
+    "Baseball pitch",
+    "Basketball dunk",
     "Billiards",
-    "CleanAndJerk",
-    "CliffDiving",
-    "CricketBowling",
-    "CricketShot",
+    "Clean and jerk",
+    "Cliff diving",
+    "Cricket bowling",
+    "Cricket shot",
     "Diving",
-    "FrisbeeCatch",
-    "GolfSwing",
-    "HammerThrow",
-    "HighJump",
-    "JavelinThrow",
-    "LongJump",
-    "PoleVault",
+    "Frisbee catch",
+    "Golf swing",
+    "Hammer throw",
+    "High jump",
+    "Javelin throw",
+    "Long jump",
+    "Pole vault",
     "Shotput",
-    "SoccerPenalty",
-    "TennisSwing",
-    "ThrowDiscus",
-    "VolleyballSpiking"
+    "Soccer penalty",
+    "Tennis swing",
+    "Throw discus",
+    "Volleyball spiking"
   ],
   "annotations": [
     {
       "segment": [53.0, 55.3],
-      "label": "SoccerPenalty"
+      "label": 16
     },
     {
       "segment": [78.2, 83.8],
-      "label": "SoccerPenalty"
+      "label": 16
     }
   ]
 }

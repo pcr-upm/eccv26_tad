@@ -7,12 +7,14 @@ import os
 import sys
 sys.path.append(os.getcwd())
 import cv2
+import copy
 import numpy as np
 import importlib.util
 from pathlib import Path
 from images_framework.src.constants import Modes
+from images_framework.src.datasets import Database
 from images_framework.src.composite import Composite
-from images_framework.src.annotations import GenericVideo
+from images_framework.src.annotations import GenericVideo, TemporalCategory
 from images_framework.src.viewer import Viewer
 from src.eccv26_tad import ECCV26TAD
 
@@ -43,6 +45,35 @@ def parse_options():
     return unknown, input_data, thresh, topk, show_viewer, save_image
 
 
+def load_ground_truth(filename):
+    """
+    Read the annotations of a single video directly from the matching JSON file.
+    """
+    import json
+    with open(filename, "r", encoding="utf-8") as ifs:
+        payload = json.load(ifs)
+    video_entries = payload.get("video", [])
+    annotations = payload.get("annotations", [])
+    class_map = payload.get("class_map", [])
+    if isinstance(video_entries, list) and video_entries:
+        video_info = video_entries[0]
+        video_info = dict(video_info)
+        video_info.setdefault("duration", payload.get("duration"))
+        video_info.setdefault("frame", payload.get("frame"))
+        video_info.setdefault("subset", payload.get("database"))
+    else:
+        video_info = None
+    gt = []
+    for anno in annotations:
+        if anno.get("label") == "Ambiguous":
+            continue
+        gt.append(dict(segment=anno["segment"], label=anno["label"]))
+    gt.sort(key=lambda x: x["segment"][0])
+    if video_info is None and not gt:
+        return None, [], class_map
+    return video_info, gt, class_map
+
+
 def main():
     """
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test script.
@@ -63,13 +94,37 @@ def main():
     Path(dirname).mkdir(parents=True, exist_ok=True)
 
     # Process video and show results
-    ann, pred = GenericVideo(filename=input_data), GenericVideo(filename=input_data)
+    datasets = [subclass().get_names() for subclass in Database.__subclasses__()]
+    db = Database.__subclasses__()[next((idx for idx, subset in enumerate(datasets) if 'thumos' in subset), None)]()
+    categories = db.get_categories()
+    video_info, ground_truth, _ = load_ground_truth(os.path.splitext(input_data)[0]+'.json')
+    ann = GenericVideo(filename=input_data)
+    ann.duration = video_info.get('duration', '?')
+    pred = copy.deepcopy(ann)
+    for action in ground_truth:
+        ann.add_action(TemporalCategory(label=categories[int(action['label'])], segment=tuple(action['segment'])))
     ticks = cv2.getTickCount()
     composite.process(ann, pred)
     ticks = cv2.getTickCount() - ticks
     shown = [action for action in pred.actions if action.score >= thresh]
     if topk >= 0:
         shown = shown[: topk]
+
+    # Print the best K results
+    print("\n" + "=" * 70)
+    print(f"VIDEO: {input_data}")
+    if video_info is not None:
+        print(f"  duration: {ann.duration} s | frames: {video_info.get('frame', '?')}")
+    print("=" * 70)
+    print(f"\nGROUND TRUTH ({len(ann.actions)} segments):")
+    if len(ann.actions) == 0:
+        print("  (no ground truth annotations found for this video)")
+    else:
+        print(f"  {'start':>8}  {'end':>8}  label")
+        print(f"  {'-'*8}  {'-'*8}  {'-'*20}")
+        for action in ann.actions:
+            s, e = action.segment
+            print(f"  {s:>8.2f}  {e:>8.2f}  {action.label.name}")
     print(
         f"\nPREDICTIONS (showing {len(shown)} of {len(pred.actions)}"
         f"{f', score >= {thresh}' if thresh > 0 else ''}):"

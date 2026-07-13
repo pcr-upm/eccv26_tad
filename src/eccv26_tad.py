@@ -28,13 +28,13 @@ class ECCV26TAD(Recognition):
         self.model = None
         self.device = None
         self.ckpt = None
-        self.thresh = None
-        self.topk = None
+        self.classes = None
 
     def parse_options(self, params):
         super().parse_options(params)
         import argparse
         from mmengine.config import Config
+        from images_framework.categories.actions import Action as Oa
         parser = argparse.ArgumentParser(prog='ECCV26TAD', add_help=False)
         parser.add_argument('--gpu', dest='gpu', type=int, action='append',
                             help='GPU ID (negative value indicates CPU).')
@@ -48,6 +48,7 @@ class ECCV26TAD(Recognition):
         mode_gpu = torch.cuda.is_available() and -1 not in args.gpu
         self.device = torch.device('cuda' if mode_gpu else 'cpu')
         self.ckpt = args.ckpt
+        self.classes = {0: "BaseballPitch", 1: "BasketballDunk", 2: "Billiards", 3: "CleanAndJerk", 4: "CliffDiving", 5: "CricketBowling", 6: "CricketShot", 7: "Diving", 8: "FrisbeeCatch", 9: "GolfSwing", 10: "HammerThrow", 11: "HighJump", 12: "JavelinThrow", 13: "LongJump", 14: "PoleVault", 15: "Shotput", 16: "SoccerPenalty", 17: "TennisSwing", 18: "ThrowDiscus", 19: "VolleyballSpiking"}
 
     def train(self, anns_train, anns_valid):
         print('Training model')
@@ -87,34 +88,6 @@ class ECCV26TAD(Recognition):
             self.model.eval()
 
     def process(self, ann, pred):
-        def load_ground_truth(ann_file):
-            """
-            Read the annotations of a single video directly from the matching JSON file.
-            """
-            import json
-            with open(ann_file, "r", encoding="utf-8") as ifs:
-                payload = json.load(ifs)
-            video_entries = payload.get("video", [])
-            annotations = payload.get("annotations", [])
-            class_map = payload.get("class_map", [])
-            if isinstance(video_entries, list) and video_entries:
-                video_info = video_entries[0]
-                video_info = dict(video_info)
-                video_info.setdefault("duration", payload.get("duration"))
-                video_info.setdefault("frame", payload.get("frame"))
-                video_info.setdefault("subset", payload.get("database"))
-            else:
-                video_info = None
-            gt = []
-            for anno in annotations:
-                if anno.get("label") == "Ambiguous":
-                    continue
-                gt.append(dict(segment=anno["segment"], label=anno["label"]))
-            gt.sort(key=lambda x: x["segment"][0])
-            if video_info is None and not gt:
-                return None, [], class_map
-            return video_info, gt, class_map
-        
         def _probe_video_frame_duration(video_path):
             """
             Fallback to read frame count and duration directly from the video file when
@@ -237,22 +210,13 @@ class ECCV26TAD(Recognition):
                 results.append(dict(segment=[round(seg.item(), 2) for seg in segment], label=class_idx[int(label.item())], score=round(score.item(), 4),))
             return results
 
-        input_data = ann.filename
-        video_info, ground_truth, external_cls = load_ground_truth(os.path.splitext(input_data)[0]+'.json')
-        # the external classifier maps predicted class indices -> category names, so it
-        # must list ALL training classes in the same (sorted) order used at training time
-        num_classes = self.cfg.model["rpn_head"]["num_classes"]
-        if len(external_cls) != num_classes:
-            raise ValueError(
-                f"'class_map' in the example JSON has {len(external_cls)} entries but the "
-                f"model predicts {num_classes} classes. It must list all {num_classes} "
-                f"training classes in sorted order (see category_idx.txt used at training)."
-            )
-
         # build a dataset containing only the requested example video, reusing the
         # real sliding-window test pipeline from the config
-        test_dataset = build_example_dataset(self.cfg, input_data, video_info)
-        print(f"Loaded example video '{os.path.basename(input_data)}' as {len(test_dataset)} window(s).")
+        video_info = dict()
+        video_info.setdefault("duration", 103.234)
+        video_info.setdefault("frame", 3094)
+        test_dataset = build_example_dataset(self.cfg, pred.filename, video_info)
+        print(f"Loaded example video '{os.path.basename(pred.filename)}' as {len(test_dataset)} window(s).")
 
         use_amp = getattr(self.cfg.solver, "amp", False)
 
@@ -275,7 +239,7 @@ class ECCV26TAD(Recognition):
                         return_loss=False,
                         infer_cfg=self.cfg.inference,
                         post_cfg=self.cfg.post_processing,
-                        ext_cls=external_cls,
+                        ext_cls=list(self.classes.values()),
                     )
 
             for k, v in results.items():
@@ -285,27 +249,10 @@ class ECCV26TAD(Recognition):
                     result_dict[k] = v
 
         # merge windows with NMS (same as sliding-window evaluation)
-        video_name = os.path.splitext(os.path.basename(input_data))[0]
-        predictions = result_dict.get(video_name, result_dict.get(os.path.basename(input_data), result_dict.get(input_data, [])))
+        video_name = os.path.splitext(os.path.basename(pred.filename))[0]
+        predictions = result_dict.get(video_name, result_dict.get(os.path.basename(pred.filename), result_dict.get(pred.filename, [])))
         if len(predictions) > 0 and self.cfg.post_processing.nms is not None:
             predictions = nms_single_video(predictions, dict(self.cfg.post_processing.nms))
         predictions.sort(key=lambda x: x["score"], reverse=True)
         for action in predictions:
-            pred.add_action(TemporalCategory(label=action['label'], score=action['score'], segment=action['segment']))
-
-        # ---- report ----
-        print("\n" + "=" * 70)
-        print(f"VIDEO: {input_data}")
-        if video_info is not None:
-            print(f"  duration: {video_info.get('duration', '?')} s | frames: {video_info.get('frame', '?')}")
-        print("=" * 70)
-
-        print(f"\nGROUND TRUTH ({len(ground_truth)} segments):")
-        if len(ground_truth) == 0:
-            print("  (no ground truth annotations found for this video)")
-        else:
-            print(f"  {'start':>8}  {'end':>8}  label")
-            print(f"  {'-'*8}  {'-'*8}  {'-'*20}")
-            for gt in ground_truth:
-                s, e = gt["segment"]
-                print(f"  {s:>8.2f}  {e:>8.2f}  {gt['label']}")
+            pred.add_action(TemporalCategory(label=action['label'], score=action['score'], segment=tuple(action['segment'])))
