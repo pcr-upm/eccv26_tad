@@ -13,6 +13,7 @@ from opentad.utils import set_seed
 from opentad.datasets import ThumosSlidingDataset
 from opentad.datasets.builder import collate
 from images_framework.src.recognition import Recognition
+from images_framework.src.annotations import TemporalCategory
 set_seed(42)
 np.random.seed(42)
 
@@ -40,19 +41,13 @@ class ECCV26TAD(Recognition):
         parser.add_argument('--config', metavar='FILE', type=str, 
                             help='Path to config file.')
         parser.add_argument('--ckpt', type=str, default='none', 
-                            help="The checkpoint path")
-        parser.add_argument('--thresh', type=float, default=0.0,
-                            help='Only show predictions with score above this threshold')
-        parser.add_argument('--topk', type=int, default=20,
-                            help='Show at most this many predictions (sorted by score)')
+                            help='The checkpoint path.')
         args, unknown = parser.parse_known_args(params)
         print(parser.format_usage())
         self.cfg = Config.fromfile(args.config)
         mode_gpu = torch.cuda.is_available() and -1 not in args.gpu
         self.device = torch.device('cuda' if mode_gpu else 'cpu')
         self.ckpt = args.ckpt
-        self.thresh = args.thresh
-        self.topk = args.topk
 
     def train(self, anns_train, anns_valid):
         print('Training model')
@@ -242,7 +237,7 @@ class ECCV26TAD(Recognition):
                 results.append(dict(segment=[round(seg.item(), 2) for seg in segment], label=class_idx[int(label.item())], score=round(score.item(), 4),))
             return results
 
-        input_data = ann.images[0].filename
+        input_data = ann.filename
         video_info, ground_truth, external_cls = load_ground_truth(os.path.splitext(input_data)[0]+'.json')
         # the external classifier maps predicted class indices -> category names, so it
         # must list ALL training classes in the same (sorted) order used at training time
@@ -295,6 +290,8 @@ class ECCV26TAD(Recognition):
         if len(predictions) > 0 and self.cfg.post_processing.nms is not None:
             predictions = nms_single_video(predictions, dict(self.cfg.post_processing.nms))
         predictions.sort(key=lambda x: x["score"], reverse=True)
+        for action in predictions:
+            pred.add_action(TemporalCategory(label=action['label'], score=action['score'], segment=action['segment']))
 
         # ---- report ----
         print("\n" + "=" * 70)
@@ -312,19 +309,3 @@ class ECCV26TAD(Recognition):
             for gt in ground_truth:
                 s, e = gt["segment"]
                 print(f"  {s:>8.2f}  {e:>8.2f}  {gt['label']}")
-
-        shown = [p for p in predictions if p["score"] >= self.thresh]
-        if self.topk >= 0:
-            shown = shown[: self.topk]
-        print(
-            f"\nPREDICTIONS (showing {len(shown)} of {len(predictions)}"
-            f"{f', score >= {self.thresh}' if self.thresh > 0 else ''}):"
-        )
-        if len(shown) == 0:
-            print("  (no predictions)")
-        else:
-            print(f"  {'start':>8}  {'end':>8}  {'score':>7}  label")
-            print(f"  {'-'*8}  {'-'*8}  {'-'*7}  {'-'*20}")
-            for p in shown:
-                s, e = p["segment"]
-                print(f"  {s:>8.2f}  {e:>8.2f}  {p['score']:>7.4f}  {p['label']}")

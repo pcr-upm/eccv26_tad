@@ -12,7 +12,7 @@ import importlib.util
 from pathlib import Path
 from images_framework.src.constants import Modes
 from images_framework.src.composite import Composite
-from images_framework.src.annotations import GenericGroup, GenericImage
+from images_framework.src.annotations import GenericVideo
 from images_framework.src.viewer import Viewer
 from src.eccv26_tad import ECCV26TAD
 
@@ -25,6 +25,10 @@ def parse_options():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-data', '-d', dest='input_data', required=True, default='',
                         help='Input as image video file.')
+    parser.add_argument('--thresh', type=float, default=0.0,
+                        help='Only show predictions with score above this threshold')
+    parser.add_argument('--topk', type=int, default=20,
+                        help='Show at most this many predictions (sorted by score)')
     parser.add_argument('--show-viewer', '-v', dest='show_viewer', action="store_true",
                         help='Show results visually.')
     parser.add_argument('--save-image', '-i', dest='save_image', action="store_true",
@@ -32,9 +36,11 @@ def parse_options():
     args, unknown = parser.parse_known_args()
     print(parser.format_usage())
     input_data = args.input_data
+    thresh = args.thresh
+    topk = args.topk
     show_viewer = args.show_viewer
     save_image = args.save_image
-    return unknown, input_data, show_viewer, save_image
+    return unknown, input_data, thresh, topk, show_viewer, save_image
 
 
 def main():
@@ -42,7 +48,7 @@ def main():
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test script.
     """
     print('OpenCV ' + cv2.__version__)
-    unknown, input_data, show_viewer, save_image = parse_options()
+    unknown, input_data, thresh, topk, show_viewer, save_image = parse_options()
 
     # Load vision components
     composite = Composite()
@@ -57,12 +63,25 @@ def main():
     Path(dirname).mkdir(parents=True, exist_ok=True)
 
     # Process video and show results
-    ann, pred = GenericGroup(), GenericGroup()
-    img_ann = GenericImage(input_data)
-    ann.add_image(img_ann)
+    ann, pred = GenericVideo(filename=input_data), GenericVideo(filename=input_data)
     ticks = cv2.getTickCount()
     composite.process(ann, pred)
     ticks = cv2.getTickCount() - ticks
+    shown = [action for action in pred.actions if action.score >= thresh]
+    if topk >= 0:
+        shown = shown[: topk]
+    print(
+        f"\nPREDICTIONS (showing {len(shown)} of {len(pred.actions)}"
+        f"{f', score >= {thresh}' if thresh > 0 else ''}):"
+    )
+    if len(shown) == 0:
+        print("  (no predictions)")
+    else:
+        print(f"  {'start':>8}  {'end':>8}  {'score':>7}  label")
+        print(f"  {'-'*8}  {'-'*8}  {'-'*7}  {'-'*20}")
+        for action in shown:
+            s, e = action.segment
+            print(f"  {s:>8.2f}  {e:>8.2f}  {action.score:>7.4f}  {action.label}")
     if show_viewer:
         for img_pred in pred.images:
             viewer.set_image(img_pred)
