@@ -52,26 +52,12 @@ def load_ground_truth(filename):
     import json
     with open(filename, "r", encoding="utf-8") as ifs:
         payload = json.load(ifs)
-    video_entries = payload.get("video", [])
     annotations = payload.get("annotations", [])
-    class_map = payload.get("class_map", [])
-    if isinstance(video_entries, list) and video_entries:
-        video_info = video_entries[0]
-        video_info = dict(video_info)
-        video_info.setdefault("duration", payload.get("duration"))
-        video_info.setdefault("frame", payload.get("frame"))
-        video_info.setdefault("subset", payload.get("database"))
-    else:
-        video_info = None
     gt = []
     for anno in annotations:
-        if anno.get("label") == "Ambiguous":
-            continue
         gt.append(dict(segment=anno["segment"], label=anno["label"]))
     gt.sort(key=lambda x: x["segment"][0])
-    if video_info is None and not gt:
-        return None, [], class_map
-    return video_info, gt, class_map
+    return gt
 
 
 def main():
@@ -97,9 +83,16 @@ def main():
     datasets = [subclass().get_names() for subclass in Database.__subclasses__()]
     db = Database.__subclasses__()[next((idx for idx, subset in enumerate(datasets) if 'thumos' in subset), None)]()
     categories = db.get_categories()
-    video_info, ground_truth, _ = load_ground_truth(os.path.splitext(input_data)[0]+'.json')
+    ground_truth = load_ground_truth(os.path.splitext(input_data)[0]+'.json')
+    cap = cv2.VideoCapture(input_data)
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(f"Cannot open video file: {input_data}")
+    frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    cap.release()
     ann = GenericVideo(filename=input_data)
-    ann.duration = video_info.get('duration', '?')
+    ann.duration = frame / fps if fps > 0 else 0.0
     pred = copy.deepcopy(ann)
     for action in ground_truth:
         ann.add_action(TemporalCategory(label=categories[int(action['label'])], segment=tuple(action['segment'])))
@@ -113,8 +106,7 @@ def main():
     # Print the best K results
     print("\n" + "=" * 70)
     print(f"VIDEO: {input_data}")
-    if video_info is not None:
-        print(f"  duration: {ann.duration} s | frames: {video_info.get('frame', '?')}")
+    print(f"  duration: {ann.duration} s | frames: {frame}")
     print("=" * 70)
     print(f"\nGROUND TRUTH ({len(ann.actions)} segments):")
     if len(ann.actions) == 0:

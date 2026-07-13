@@ -64,7 +64,10 @@ class ECCV26TAD(Recognition):
         print('Loading model from {}'.format(model_path))
         self.cfg.model['backbone']['custom']['pretrain'] = model_path + self.cfg.model['backbone']['custom']['pretrain']
         self.model = build_detector(self.cfg.model)
-        # torchinfo.summary(self.model, input_size=(self.batch_size, 3, self.width, self.height), depth=5, device=self.device.type, col_names=['input_size', 'output_size', 'num_params', 'kernel_size'])
+        # [batch, num_clips, channels, T, H, W]
+        window_size = self.cfg.window_size
+        img_size = self.cfg.model['backbone']['backbone']['img_size']
+        torchinfo.summary(self.model.backbone, input_size=(1, 1, 3, window_size, img_size, img_size), depth=5, device=self.device.type, col_names=['input_size', 'output_size', 'num_params', 'kernel_size'])
         if mode is Modes.TEST:
             self.model = self.model.to(self.device)
             # Load checkpoint (args -> config -> best)
@@ -132,20 +135,17 @@ class ECCV26TAD(Recognition):
                 self.filter_gt = False
                 self.test_mode = True
                 self.pipeline = Compose(pipeline)
-
                 # feature settings
                 self.feature_stride = int(feature_stride)
                 self.sample_stride = int(sample_stride)
                 self.offset_frames = 0
                 self.snippet_stride = int(feature_stride * sample_stride)
                 self.fps = -1
-
                 # window settings
                 self.window_size = int(window_size)
                 self.window_stride = int(window_size * (1 - window_overlap_ratio))
                 self.ioa_thresh = 0.75
                 self.video_split_ratio = None
-
                 # thumos-specific attributes (keypoints are unused for the example)
                 self.skeleton_data_path_2d = None
                 self.preprocessed_skeleton_path = None
@@ -153,31 +153,22 @@ class ECCV26TAD(Recognition):
                 self.debug = False
                 self._aligned_cache = {}
                 self._file_exists_cache = {}
-
                 # build the sliding windows for this single video (test_mode -> no gt)
                 self.data_list = self.split_video_to_windows(video_name, video_info, {})
 
-        def build_example_dataset(cfg, input_data, video_info):
+        def build_example_dataset(cfg, input_data):
             """
             Build a dataset containing only the requested example video, reusing the real
             sliding-window test pipeline defined in the config.
             """
             test_cfg = cfg.dataset.test
-
             video_name = os.path.splitext(os.path.basename(input_data))[0]
             data_path = os.path.dirname(os.path.abspath(input_data))
-
             # ensure frame count / duration are available for the sliding-window splitting
-            video_info = dict(video_info or {})
-            if not video_info.get("frame") or not video_info.get("duration"):
-                frame, duration = _probe_video_frame_duration(input_data)
-                video_info.setdefault("frame", frame)
-                video_info.setdefault("duration", duration)
-                if not video_info.get("frame"):
-                    video_info["frame"] = frame
-                if not video_info.get("duration"):
-                    video_info["duration"] = duration
-
+            video_info = dict()
+            frame, duration = _probe_video_frame_duration(input_data)
+            video_info.setdefault("frame", frame)
+            video_info.setdefault("duration", duration)
             return ExampleSlidingDataset(
                 video_name=video_name,
                 video_info=video_info,
@@ -212,10 +203,7 @@ class ECCV26TAD(Recognition):
 
         # build a dataset containing only the requested example video, reusing the
         # real sliding-window test pipeline from the config
-        video_info = dict()
-        video_info.setdefault("duration", 103.234)
-        video_info.setdefault("frame", 3094)
-        test_dataset = build_example_dataset(self.cfg, pred.filename, video_info)
+        test_dataset = build_example_dataset(self.cfg, pred.filename)
         print(f"Loaded example video '{os.path.basename(pred.filename)}' as {len(test_dataset)} window(s).")
 
         use_amp = getattr(self.cfg.solver, "amp", False)
