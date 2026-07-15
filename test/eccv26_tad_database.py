@@ -5,13 +5,8 @@ __email__ = 'ricardo.pizarroc@edu.uah.es'
 
 import os
 import sys
-
-sys.dont_write_bytecode = True
-path = os.path.join(os.path.dirname(__file__), "..")
-if path not in sys.path:
-    sys.path.insert(0, path)
-
-import argparse
+sys.path.append(os.getcwd())
+import cv2
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
@@ -20,114 +15,109 @@ from mmengine.config import Config, DictAction
 from opentad.models import build_detector
 from opentad.datasets import build_dataset, build_dataloader
 from opentad.cores import eval_one_epoch
-from opentad.utils import (
-    update_workdir,
-    set_seed,
-    create_folder,
-    setup_logger,
-    remap_legacy_sparse_conv_weights,
-    override_dataset_paths,
-)
+from opentad.utils import (update_workdir, set_seed, create_folder, setup_logger, remap_legacy_sparse_conv_weights, override_dataset_paths)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Test a Temporal Action Detector")
-    parser.add_argument("config", metavar="FILE", type=str, help="path to config file")
-    parser.add_argument("--checkpoint", type=str, default="none", help="the checkpoint path")
-    parser.add_argument("--seed", type=int, default=42, help="random seed")
-    parser.add_argument("--id", type=int, default=0, help="repeat experiment id")
-    parser.add_argument("--not_eval", action="store_true", help="whether to not to eval, only do inference")
-    parser.add_argument("--cfg-options", nargs="+", action=DictAction, help="override settings")
-    parser.add_argument(
-        "--ann-file", type=str, default=None,
-        help="override the annotation file path for all dataset splits and evaluation",
-    )
-    parser.add_argument(
-        "--class-map", type=str, default=None,
-        help="override the class map / category index file path for all dataset splits",
-    )
-    parser.add_argument(
-        "--data-root", type=str, default=None,
-        help="override the raw video / feature data root path for all dataset splits",
-    )
-    parser.add_argument(
-        "--block-list", type=str, default=None,
-        help="override the block list file path for all dataset splits",
-    )
-    parser.add_argument(
-        "--external-cls-path", type=str, default=None,
-        help="override the external classifier (post_processing.external_cls) path",
-    )
-    args = parser.parse_args()
-    return args
+def parse_options():
+    """
+    Parse options from command line.
+    """
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("config", metavar="FILE", type=str, 
+                        help="path to config file")
+    parser.add_argument("--checkpoint", type=str, default="none", 
+                        help="the checkpoint path")
+    parser.add_argument("--seed", type=int, default=42, 
+                        help="random seed")
+    parser.add_argument("--id", type=int, default=0, 
+                        help="repeat experiment id")
+    parser.add_argument("--not_eval", action="store_true", 
+                        help="whether to not to eval, only do inference")
+    parser.add_argument("--cfg-options", nargs="+", action=DictAction, 
+                        help="override settings")
+    parser.add_argument("--ann-file", type=str, default=None,
+                        help="override the annotation file path for all dataset splits and evaluation")
+    parser.add_argument("--class-map", type=str, default=None,
+                        help="override the class map / category index file path for all dataset splits")
+    parser.add_argument("--data-root", type=str, default=None,
+                        help="override the raw video / feature data root path for all dataset splits")
+    parser.add_argument("--block-list", type=str, default=None,
+                        help="override the block list file path for all dataset splits")
+    parser.add_argument("--external-cls-path", type=str, default=None,
+                        help="override the external classifier (post_processing.external_cls) path")
+    args, unknown = parser.parse_known_args()
+    print(parser.format_usage())
+    config = args.config
+    checkpoint = args.checkpoint
+    seed = args.seed
+    id = args.id
+    not_eval = args.not_eval
+    cfg_options = args.cfg_options
+    ann_file = args.ann_file
+    class_map = args.class_map
+    data_root = args.data_root
+    block_list = args.block_list
+    external_cls_path = args.external_cls_path
+    return unknown, config, checkpoint, seed, id, not_eval, cfg_options, ann_file, class_map, data_root, block_list, external_cls_path
 
 
 def main():
-    args = parse_args()
+    """
+    SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test database script.
+    """
+    print('OpenCV ' + cv2.__version__)
+    unknown, config, checkpoint, seed, id, not_eval, cfg_options, ann_file, class_map, data_root, block_list, external_cls_path = parse_options()
 
     # load config
-    cfg = Config.fromfile(args.config)
-    if args.cfg_options is not None:
-        cfg.merge_from_dict(args.cfg_options)
-    cfg = override_dataset_paths(
-        cfg,
-        ann_file=args.ann_file,
-        class_map=args.class_map,
-        data_path=args.data_root,
-        block_list=args.block_list,
-        external_cls_path=args.external_cls_path,
-    )
+    cfg = Config.fromfile(config)
+    if cfg_options is not None:
+        cfg.merge_from_dict(cfg_options)
+    cfg = override_dataset_paths(cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
 
     # DDP init
-    args.local_rank = int(os.environ["LOCAL_RANK"])
-    args.world_size = int(os.environ["WORLD_SIZE"])
-    args.rank = int(os.environ["RANK"])
-    print(f"Distributed init (rank {args.rank}/{args.world_size}, local rank {args.local_rank})")
-    dist.init_process_group("nccl", rank=args.rank, world_size=args.world_size)
-    torch.cuda.set_device(args.local_rank)
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    rank = int(os.environ["RANK"])
+    print(f"Distributed init (rank {rank}/{world_size}, local rank {local_rank})")
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(local_rank)
 
     # set random seed, create work_dir
-    set_seed(args.seed)
-    cfg = update_workdir(cfg, args.id, torch.cuda.device_count())
-    if args.rank == 0:
+    set_seed(seed)
+    cfg = update_workdir(cfg, id, torch.cuda.device_count())
+    if rank == 0:
         create_folder(cfg.work_dir)
 
     # setup logger
-    logger = setup_logger("Test", save_dir=cfg.work_dir, distributed_rank=args.rank)
+    logger = setup_logger("Test", save_dir=cfg.work_dir, distributed_rank=rank)
     logger.info(f"Using torch version: {torch.__version__}, CUDA version: {torch.version.cuda}")
     logger.info(f"Config: \n{cfg.pretty_text}")
 
     # build dataset
     test_dataset = build_dataset(cfg.dataset.test, default_args=dict(logger=logger))
-    test_loader = build_dataloader(
-        test_dataset,
-        rank=args.rank,
-        world_size=args.world_size,
-        shuffle=False,
-        drop_last=False,
-        **cfg.solver.test,
-    )
+    test_loader = build_dataloader(test_dataset, rank=rank, world_size=world_size, shuffle=False, drop_last=False, **cfg.solver.test)
 
     # build model
     cfg.model['backbone']['custom']['pretrain'] = 'data/' + cfg.model['backbone']['custom']['pretrain']
     model = build_detector(cfg.model)
 
     # DDP
-    model = model.to(args.local_rank)
-    model = DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
-    logger.info(f"Using DDP with total {args.world_size} GPUS...")
+    model = model.to(local_rank)
+    model = DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank)
+    logger.info(f"Using DDP with total {world_size} GPUS...")
 
     if cfg.inference.load_from_raw_predictions:  # if load with saved predictions, no need to load checkpoint
         logger.info(f"Loading from raw predictions: {cfg.inference.fuse_list}")
     else:  # load checkpoint: args -> config -> best
-        if args.checkpoint != "none":
-            checkpoint_path = args.checkpoint
+        if checkpoint != "none":
+            checkpoint_path = checkpoint
         elif "test_epoch" in cfg.inference.keys():
             checkpoint_path = os.path.join(cfg.work_dir, f"checkpoint/epoch_{cfg.inference.test_epoch}.pth")
         else:
             checkpoint_path = os.path.join(cfg.work_dir, "checkpoint/best.pth")
         logger.info("Loading checkpoint from: {}".format(checkpoint_path))
-        device = f"cuda:{args.rank % torch.cuda.device_count()}"
+        device = f"cuda:{rank % torch.cuda.device_count()}"
         checkpoint = torch.load(checkpoint_path, map_location=device)
         logger.info("Checkpoint is epoch {}.".format(checkpoint["epoch"]))
 
@@ -157,17 +147,7 @@ def main():
 
     # test the detector
     logger.info("Testing Starts...\n")
-    eval_one_epoch(
-        test_loader,
-        model,
-        cfg,
-        logger,
-        args.rank,
-        model_ema=None,  # since we have loaded the ema model above
-        use_amp=use_amp,
-        world_size=args.world_size,
-        not_eval=args.not_eval,
-    )
+    eval_one_epoch(test_loader, model, cfg, logger, rank, model_ema=None, use_amp=use_amp, world_size=world_size, not_eval=not_eval)
     logger.info("Testing Over...\n")
 
 
