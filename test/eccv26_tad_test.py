@@ -62,7 +62,7 @@ def load_ground_truth(filename):
 
 def main():
     """
-    SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test script.
+    SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test video script.
     """
     print('OpenCV ' + cv2.__version__)
     unknown, input_data, thresh, topk, show_viewer, save_image = parse_options()
