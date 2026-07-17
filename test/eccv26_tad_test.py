@@ -45,7 +45,7 @@ def parse_options():
     return unknown, input_data, thresh, topk, show_viewer, save_image
 
 
-def load_ground_truth(filename):
+def load_annotations(filename):
     """
     Read the annotations of a single video directly from the matching JSON file.
     """
@@ -79,11 +79,11 @@ def main():
     dirname = os.path.join(output_path, 'images/')
     Path(dirname).mkdir(parents=True, exist_ok=True)
 
-    # Process video and show results
+    # Load annotations
     datasets = [subclass().get_names() for subclass in Database.__subclasses__()]
     db = Database.__subclasses__()[next((idx for idx, subset in enumerate(datasets) if 'thumos' in subset), None)]()
     categories = db.get_categories()
-    ground_truth = load_ground_truth(os.path.splitext(input_data)[0]+'.json')
+    ground_truth = load_annotations(os.path.splitext(input_data)[0]+'.json')
     cap = cv2.VideoCapture(input_data)
     if not cap.isOpened():
         cap.release()
@@ -96,6 +96,8 @@ def main():
     pred = copy.deepcopy(ann)
     for action in ground_truth:
         ann.add_action(TemporalCategory(label=categories[int(action['label'])], segment=tuple(action['segment'])))
+
+    # Process video
     ticks = cv2.getTickCount()
     composite.process(ann, pred)
     ticks = cv2.getTickCount() - ticks
@@ -130,16 +132,16 @@ def main():
             s, e = action.segment
             print(f"  {s:>8.2f}  {e:>8.2f}  {action.score:>7.4f}  {action.label}")
     if show_viewer:
-        for img_pred in pred.images:
-            viewer.set_image(img_pred)
-        composite.show(viewer, ann, pred)
+        # for img_pred in pred.images:
+        #     viewer.set_image(img_pred)
+        # composite.show(viewer, ann, pred)
         fps = 'FPS = ' + "{0:.3f}".format(cv2.getTickFrequency() / ticks)
         viewer.text(pred.images[0], fps, (20, np.shape(viewer.get_image(pred.images[0]))[0] - 20), 0.5, (0, 255, 0))
         viewer.show(1)
     if save_image:
-        for img_pred in pred.images:
-            viewer.set_image(img_pred)
-        composite.show(viewer, ann, pred)
+        # for img_pred in pred.images:
+        #     viewer.set_image(img_pred)
+        # composite.show(viewer, ann, pred)
         viewer.save(dirname)
         composite.save(dirname, pred)
     print('End of eccv26_tad_test')
