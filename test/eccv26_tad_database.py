@@ -83,13 +83,13 @@ def main():
     wandb.init(project=sr.cfg.get('project_name', 'opentad'), config=sr.cfg)
     with open(os.path.join(sr.cfg.work_dir, 'result_detection.json'), 'r') as ifs:
         result_dict = json.load(ifs)
-    result_eval = dict(results=result_dict)
-    evaluator = build_evaluator(dict(prediction_filename=result_eval, **sr.cfg.evaluation))
+    evaluator = build_evaluator(dict(prediction_filename=result_dict, **sr.cfg.evaluation))
     metrics_dict = evaluator.evaluate()
+    evaluator.logging()
     wandb.log(metrics_dict)
     columns = ['video-id', 'segment', 'label', 'score']
     data = []
-    for video_id, predictions in result_dict.items():
+    for video_id, predictions in result_dict['results'].items():
         for pred in predictions:
             data.append([video_id, str(pred['segment']), pred['label'], pred['score']])
     wandb.log({'evaluation_results': wandb.Table(data=data, columns=columns)})

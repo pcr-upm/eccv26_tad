@@ -33,7 +33,6 @@ class ECCV26TAD(Recognition):
     def parse_options(self, params):
         super().parse_options(params)
         import argparse
-        from pathlib import Path
         from mmengine.config import Config
         parser = argparse.ArgumentParser(prog='ECCV26TAD', add_help=False)
         parser.add_argument('--gpu', dest='gpu', type=int, default=-1,
@@ -45,8 +44,6 @@ class ECCV26TAD(Recognition):
         args, unknown = parser.parse_known_args(params)
         print(parser.format_usage())
         self.cfg = Config.fromfile(args.config)
-        self.cfg.work_dir = self.path + 'output/'
-        Path(self.cfg.work_dir).mkdir(exist_ok=True)
         self.gpu = args.gpu
         self.ckpt = args.ckpt
         self.classes = {0: "BaseballPitch", 1: "BasketballDunk", 2: "Billiards", 3: "CleanAndJerk", 4: "CliffDiving", 5: "CricketBowling", 6: "CricketShot", 7: "Diving", 8: "FrisbeeCatch", 9: "GolfSwing", 10: "HammerThrow", 11: "HighJump", 12: "JavelinThrow", 13: "LongJump", 14: "PoleVault", 15: "Shotput", 16: "SoccerPenalty", 17: "TennisSwing", 18: "ThrowDiscus", 19: "VolleyballSpiking"}
@@ -129,40 +126,3 @@ class ECCV26TAD(Recognition):
         print("Testing Starts...\n")
         eval_one_epoch(test_loader, self.model, self.cfg, print, self.rank, model_ema=None, use_amp=use_amp, world_size=self.world_size, not_eval=True)
         print("Testing Over...\n")
-
-        # # this is a sliding window dataset, so NMS is applied after merging windows
-        # self.cfg.post_processing.sliding_window = True
-
-        # # inference, window by window
-        # # model.eval()
-        # result_dict = {}
-        # print("Running inference...")
-        # for index in range(len(test_dataset)):
-        #     data_dict = collate([test_dataset[index]])
-        #     data_dict["inputs"] = data_dict["inputs"].to(self.device)
-        #     data_dict["masks"] = data_dict["masks"].to(self.device)
-
-        #     with torch.cuda.amp.autocast(dtype=torch.float16, enabled=use_amp):
-        #         with torch.no_grad():
-        #             results = self.model(
-        #                 **data_dict,
-        #                 return_loss=False,
-        #                 infer_cfg=self.cfg.inference,
-        #                 post_cfg=self.cfg.post_processing,
-        #                 ext_cls=list(self.classes.values()),
-        #             )
-
-        #     for k, v in results.items():
-        #         if k in result_dict:
-        #             result_dict[k].extend(v)
-        #         else:
-        #             result_dict[k] = v
-
-        # # merge windows with NMS (same as sliding-window evaluation)
-        # video_name = os.path.splitext(os.path.basename(pred.filename))[0]
-        # predictions = result_dict.get(video_name, result_dict.get(os.path.basename(pred.filename), result_dict.get(pred.filename, [])))
-        # if len(predictions) > 0 and self.cfg.post_processing.nms is not None:
-        #     predictions = nms_single_video(predictions, dict(self.cfg.post_processing.nms))
-        # predictions.sort(key=lambda x: x["score"], reverse=True)
-        # for action in predictions:
-        #     pred.add_action(TemporalCategory(label=action['label'], score=action['score'], segment=tuple(action['segment'])))
