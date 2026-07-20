@@ -15,6 +15,39 @@ set_seed(42)
 np.random.seed(42)
 
 
+class ExampleSlidingDataset(ThumosSlidingDataset):
+    """
+    Single-video sliding-window dataset, reuses real test pipeline
+    """
+    def __init__(self, video_name, video_info, data_path, pipeline, class_map, window_size, feature_stride=4, sample_stride=1, window_overlap_ratio=0.5):
+        self.data_path = data_path
+        self.block_list = None
+        self.ann_file = None
+        self.subset_name = None
+        self.logger = print
+        self.class_map = class_map
+        self.class_agnostic = False
+        self.filter_gt = False
+        self.test_mode = True
+        self.pipeline = Compose(pipeline)
+        self.feature_stride = int(feature_stride)
+        self.sample_stride = int(sample_stride)
+        self.offset_frames = 0
+        self.snippet_stride = int(feature_stride * sample_stride)
+        self.fps = -1
+        self.window_size = int(window_size)
+        self.window_stride = int(window_size * (1 - window_overlap_ratio))
+        self.ioa_thresh = 0.75
+        self.video_split_ratio = None
+        self.skeleton_data_path_2d = None
+        self.preprocessed_skeleton_path = None
+        self.skeleton_cache = {}
+        self.debug = False
+        self._aligned_cache = {}
+        self._file_exists_cache = {}
+        self.data_list = self.split_video_to_windows(video_name, video_info, {})
+
+
 class ECCV26TAD(Recognition):
     """
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection
@@ -44,6 +77,8 @@ class ECCV26TAD(Recognition):
         args, unknown = parser.parse_known_args(params)
         print(parser.format_usage())
         self.cfg = Config.fromfile(args.config)
+        self.cfg.work_dir = self.path
+        self.cfg.post_processing.save_dict = True
         self.gpu = args.gpu
         self.ckpt = args.ckpt
         self.classes = {0: "BaseballPitch", 1: "BasketballDunk", 2: "Billiards", 3: "CleanAndJerk", 4: "CliffDiving", 5: "CricketBowling", 6: "CricketShot", 7: "Diving", 8: "FrisbeeCatch", 9: "GolfSwing", 10: "HammerThrow", 11: "HighJump", 12: "JavelinThrow", 13: "LongJump", 14: "PoleVault", 15: "Shotput", 16: "SoccerPenalty", 17: "TennisSwing", 18: "ThrowDiscus", 19: "VolleyballSpiking"}
@@ -110,19 +145,51 @@ class ECCV26TAD(Recognition):
             self.model.eval()
 
     def process(self, ann, pred):
-        from opentad.datasets import build_dataset, build_dataloader
+        import cv2
+        import json
+        import torch.utils.data
         from opentad.cores import eval_one_epoch
+        from opentad.datasets.builder import collate as default_collate
+        from images_framework.src.annotations import TemporalCategory
 
-        # build dataset
-        test_dataset = build_dataset(self.cfg.dataset.test)
-        test_loader = build_dataloader(test_dataset, rank=self.rank, world_size=self.world_size, shuffle=False, drop_last=False, **self.cfg.solver.test)
-        print(f"Loaded video '{os.path.basename(os.path.basename(pred.filename))}' natively as {len(test_dataset)} window(s).")
+        def _probe_video_frame_duration(video_path):
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                cap.release()
+                raise RuntimeError(f"Cannot open video file: {video_path}")
+            frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+            cap.release()
+            return frame, (frame / fps if fps > 0 else 0.0)
+
+        def collate_with_device(batch):
+            data_dict = default_collate(batch)
+            if isinstance(data_dict["inputs"], torch.Tensor):
+                data_dict["inputs"] = data_dict["inputs"].to(self.device)
+            if isinstance(data_dict["masks"], torch.Tensor):
+                data_dict["masks"] = data_dict["masks"].to(self.device)
+            return data_dict
+
+        # Build dataset with only the video from pred.filename
+        test_cfg = self.cfg.dataset.test
+        video_name = os.path.splitext(os.path.basename(pred.filename))[0]
+        data_path = os.path.dirname(os.path.abspath(pred.filename))
+        video_info = {}
+        frame, duration = _probe_video_frame_duration(pred.filename)
+        video_info["frame"] = frame
+        video_info["duration"] = duration
+        test_dataset = ExampleSlidingDataset(video_name=video_name, video_info=video_info, data_path=data_path, pipeline=test_cfg.pipeline, class_map=list(self.classes.values()), window_size=getattr(test_cfg, "window_size", 768), feature_stride=getattr(test_cfg, "feature_stride", 4), sample_stride=getattr(test_cfg, "sample_stride", 1), window_overlap_ratio=getattr(test_cfg, "window_overlap_ratio", 0.5))
+        # Build dataloader with custom collate that moves to device
+        sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=self.world_size, rank=self.rank, shuffle=False, drop_last=False)
+        test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=self.cfg.solver.test.get("batch_size", 1) // self.world_size, collate_fn=collate_with_device, sampler=sampler, num_workers=0, pin_memory=False)
 
         # AMP: automatic mixed precision
         use_amp = getattr(self.cfg.solver, "amp", False)
-        if use_amp:
-            print("Using Automatic Mixed Precision...")
-
-        print("Testing Starts...\n")
         eval_one_epoch(test_loader, self.model, self.cfg, print, self.rank, model_ema=None, use_amp=use_amp, world_size=self.world_size, not_eval=True)
-        print("Testing Over...\n")
+
+        # Save prediction
+        with open(os.path.join(self.cfg.work_dir, 'result_detection.json'), 'r') as ifs:
+            data = json.load(ifs)
+        for video_name, actions in data['results'].items():
+            for action in actions:
+                pred.add_action(TemporalCategory(label=action["label"], segment=tuple(action["segment"]), score=action["score"]))
