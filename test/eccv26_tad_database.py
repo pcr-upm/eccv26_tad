@@ -7,6 +7,7 @@ import os
 import sys
 sys.path.append(os.getcwd())
 import cv2
+import json
 import wandb
 import importlib.util
 from tqdm import tqdm
@@ -61,6 +62,7 @@ def main():
     sr.load(Modes.TEST)
     sr.cfg = override_dataset_paths(sr.cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
     sr.cfg.work_dir = sr.path
+    sr.cfg.post_processing.save_dict = True
     spec = importlib.util.find_spec('images_framework')
     output_path = os.path.join('images_framework' if spec is None else os.path.dirname(spec.origin), 'output')
     viewer = Viewer('eccv26_tad_database')
@@ -77,18 +79,21 @@ def main():
     sr.process(ann, pred)
 
     # Compute metrics
-    # print("Evaluation starts...")
-    # wandb.init(project=sr.cfg.get("project_name", "opentad"), config=sr.cfg)
-    # result_eval = dict(results=result_dict)
-    # evaluator = build_evaluator(dict(prediction_filename=result_eval, **sr.cfg.evaluation))
-    # metrics_dict = evaluator.evaluate()
-    # wandb.log(metrics_dict)
-    # columns = ["video-id", "segment", "label", "score"]
-    # data = []
-    # for video_id, predictions in result_dict.items():
-    #     for pred in predictions:
-    #         data.append([video_id, str(pred["segment"]), pred["label"], pred["score"]])
-    # wandb.log({"evaluation_results": wandb.Table(data=data, columns=columns)})
+    print('Evaluation starts...')
+    wandb.init(project=sr.cfg.get('project_name', 'opentad'), config=sr.cfg)
+    with open(os.path.join(sr.cfg.work_dir, 'result_detection.json'), 'r') as ifs:
+        result_dict = json.load(ifs)
+    result_eval = dict(results=result_dict)
+    evaluator = build_evaluator(dict(prediction_filename=result_eval, **sr.cfg.evaluation))
+    metrics_dict = evaluator.evaluate()
+    wandb.log(metrics_dict)
+    columns = ['video-id', 'segment', 'label', 'score']
+    data = []
+    for video_id, predictions in result_dict.items():
+        for pred in predictions:
+            data.append([video_id, str(pred['segment']), pred['label'], pred['score']])
+    wandb.log({'evaluation_results': wandb.Table(data=data, columns=columns)})
+    print('End of eccv26_tad_database')
 
 
 if __name__ == "__main__":
