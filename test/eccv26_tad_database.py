@@ -8,7 +8,6 @@ import sys
 sys.path.append(os.getcwd())
 import cv2
 import copy
-import wandb
 import importlib.util
 from tqdm import tqdm
 from pathlib import Path
@@ -17,7 +16,7 @@ from opentad.datasets import build_dataset
 from opentad.evaluations import build_evaluator
 from images_framework.src.constants import Modes
 from images_framework.src.composite import Composite
-from images_framework.src.annotations import GenericVideo, TemporalCategory
+from images_framework.src.datasets import Database
 from images_framework.src.viewer import Viewer
 from src.eccv26_tad import ECCV26TAD
 
@@ -51,26 +50,18 @@ def parse_options():
 def load_annotations(config):
     """
     Load ground truth annotations from test dataset.
-    Returns list of GenericVideo objects (one per unique video).
     """
     test_dataset = build_dataset(config)
-    # Extract unique videos from data_list (each video may have multiple windows)
-    seen_videos = {}
-    for video_name, video_info, video_anno, _ in test_dataset.data_list:
-        if video_name not in seen_videos:
-            # Get video path from data_path + video_name
-            video_path = os.path.join(test_dataset.data_path, video_name + '.mp4')
-            seq = GenericVideo(filename=video_path)
-            seq.duration = video_info.get('duration', 0.0)
-            # Add ground truth annotations
-            if video_anno and 'gt_segments' in video_anno:
-                gt_segments = video_anno['gt_segments']
-                gt_labels = video_anno['gt_labels']
-                for segment, label in zip(gt_segments, gt_labels):
-                    label_name = test_dataset.class_map[int(label)] if int(label) < len(test_dataset.class_map) else str(label)
-                    seq.add_action(TemporalCategory(label=label_name, segment=tuple(segment)))
-            seen_videos[video_name] = seq
-    return list(seen_videos.values())
+    db = 'thumos' if config.type == 'ThumosSlidingDataset' else None
+    datasets = [subclass().get_names() for subclass in Database.__subclasses__()]
+    idx = [datasets.index(subset) for subset in datasets if db in subset]
+    if len(idx) != 1:
+        raise ValueError('Database does not exist')
+    anns = []
+    for i in tqdm(range(len(test_dataset.data_list)), file=sys.stdout):
+        seq = Database.__subclasses__()[idx[0]]().load_filename(test_dataset.data_path, db, test_dataset.data_list[i])
+        anns.append(seq)
+    return anns
 
 
 def main():
@@ -104,11 +95,13 @@ def main():
         pred = copy.deepcopy(anns[i])
         pred.clear()
         sr.process(anns[i], pred)
-        result_dict['results'].setdefault(pred.filename, [])
+        video_name = os.path.splitext(os.path.basename(pred.filename))[0]
+        result_dict['results'].setdefault(video_name, [])
         for action in pred.actions:
-            result_dict["results"][pred.filename].append({'segment': action.segment, 'label': action.label, 'score': float(action.score)})
+            result_dict["results"][video_name].append({'segment': list(action.segment), 'label': str(action.label), 'score': float(action.score)})
 
     # Compute metrics
+    import wandb
     print('Evaluation starts...')
     wandb.init(project=sr.cfg.get('project_name', 'opentad'), config=sr.cfg)
     evaluator = build_evaluator(dict(prediction_filename=result_dict, **sr.cfg.evaluation))
