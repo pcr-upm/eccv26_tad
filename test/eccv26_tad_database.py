@@ -8,15 +8,18 @@ import sys
 sys.path.append(os.getcwd())
 import cv2
 import copy
+import numpy as np
 import importlib.util
 from tqdm import tqdm
+from PIL import Image
 from pathlib import Path
 from opentad.utils import override_dataset_paths
 from opentad.datasets import build_dataset
 from opentad.evaluations import build_evaluator
 from images_framework.src.constants import Modes
-from images_framework.src.composite import Composite
 from images_framework.src.datasets import Database
+from images_framework.src.composite import Composite
+from images_framework.src.annotations import GenericImage
 from images_framework.src.viewer import Viewer
 from src.eccv26_tad import ECCV26TAD
 
@@ -28,15 +31,17 @@ def parse_options():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--ann-file", type=str, default=None,
-                        help="override the annotation file path for all dataset splits and evaluation")
+                        help="override the annotation file path for all dataset splits and evaluation.")
     parser.add_argument("--class-map", type=str, default=None,
-                        help="override the class map / category index file path for all dataset splits")
+                        help="override the class map / category index file path for all dataset splits.")
     parser.add_argument("--data-root", type=str, default=None,
-                        help="override the raw video / feature data root path for all dataset splits")
+                        help="override the raw video / feature data root path for all dataset splits.")
     parser.add_argument("--block-list", type=str, default=None,
-                        help="override the block list file path for all dataset splits")
+                        help="override the block list file path for all dataset splits.")
     parser.add_argument("--external-cls-path", type=str, default=None,
-                        help="override the external classifier (post_processing.external_cls) path")
+                        help="override the external classifier (post_processing.external_cls) path.")
+    parser.add_argument('--save-video', '-v', dest='save_video', action="store_true",
+                        help='Save processed video.')
     args, unknown = parser.parse_known_args()
     print(parser.format_usage())
     ann_file = args.ann_file
@@ -44,7 +49,8 @@ def parse_options():
     data_root = args.data_root
     block_list = args.block_list
     external_cls_path = args.external_cls_path
-    return unknown, ann_file, class_map, data_root, block_list, external_cls_path
+    save_video = args.save_video
+    return unknown, ann_file, class_map, data_root, block_list, external_cls_path, save_video
 
 
 def load_annotations(config):
@@ -69,10 +75,10 @@ def main():
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test database script.
     """
     print('OpenCV ' + cv2.__version__)
-    unknown, ann_file, class_map, data_root, block_list, external_cls_path = parse_options()
+    unknown, ann_file, class_map, data_root, block_list, external_cls_path, save_video = parse_options()
 
     # Load vision components
-    #composite = Composite()
+    composite = Composite()
     sr = ECCV26TAD('')
     #composite.add(sr)
     sr.parse_options(unknown)
@@ -80,11 +86,12 @@ def main():
     sr.cfg = override_dataset_paths(sr.cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
     sr.cfg.work_dir = sr.path
     sr.cfg.post_processing.save_dict = True
-    spec = importlib.util.find_spec('images_framework')
-    output_path = os.path.join('images_framework' if spec is None else os.path.dirname(spec.origin), 'output')
-    viewer = Viewer('eccv26_tad_database')
-    dirname = os.path.join(output_path, 'images/')
-    Path(dirname).mkdir(parents=True, exist_ok=True)
+    if save_video:
+        viewer = Viewer('eccv26_tad_test')
+        spec = importlib.util.find_spec('images_framework')
+        output_path = os.path.join('images_framework' if spec is None else os.path.dirname(spec.origin), 'output')
+        dirname = os.path.join(output_path, 'images/')
+        Path(dirname).mkdir(parents=True, exist_ok=True)
 
     # Load annotations from test dataset
     anns = load_annotations(sr.cfg.dataset.test)
@@ -99,6 +106,26 @@ def main():
         result_dict['results'].setdefault(video_name, [])
         for action in pred.actions:
             result_dict["results"][video_name].append({'segment': list(action.segment), 'label': str(action.label), 'score': float(action.score)})
+        if save_video:
+            video = cv2.VideoCapture(pred.filename)
+            frame_id = 0
+            while True:
+                ret, frame = video.read()
+                if not ret:
+                    break
+                filename = os.path.join(dirname, f"frame_{frame_id:06d}.jpg")
+                print(filename)
+                cv2.imwrite(filename, frame)
+                img_pred = GenericImage(filename)
+                width, height = Image.open(filename).size
+                img_pred.tile = np.array([0, 0, width, height])
+                pred.add_image(img_pred)
+                viewer.set_image(img_pred)
+                frame_id += 1
+            video.release()
+            composite.show(viewer, anns[i], pred)
+            viewer.save(dirname)
+            composite.save(dirname, pred)
 
     # Compute metrics
     import wandb
