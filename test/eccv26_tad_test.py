@@ -87,11 +87,12 @@ def main():
     if not cap.isOpened():
         cap.release()
         raise RuntimeError(f"Cannot open video file: {input_data}")
-    frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = float(cap.get(cv2.CAP_PROP_FPS))
     cap.release()
     ann = GenericVideo(filename=input_data)
-    ann.duration = frame / fps if fps > 0 else 0.0
+    ann.frames = frames
+    ann.duration = frames / fps if fps > 0 else 0.0
     pred = copy.deepcopy(ann)
     for action in ground_truth:
         ann.add_action(TemporalCategory(label=categories[int(action['label'])], segment=tuple(action['segment'])))
@@ -101,30 +102,30 @@ def main():
     composite.process(ann, pred)
     ticks = cv2.getTickCount() - ticks
     if save_video:
-        video = cv2.VideoCapture(pred.filename)
+        vc = cv2.VideoCapture(pred.filename)
+        fps = vc.get(cv2.CAP_PROP_FPS)
+        width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(os.path.join(dirname, os.path.splitext(os.path.basename(pred.filename))[0]+'.avi'))
+        vw = cv2.VideoWriter(os.path.join(dirname, os.path.splitext(os.path.basename(pred.filename))[0]+'.avi'), fourcc=cv2.VideoWriter_fourcc(*'XVID'), fps=fps, frameSize=(width, height))
         frame_id = 0
         while True:
-            ret, frame = video.read()
+            ret, frame = vc.read()
             if not ret:
                 break
             filename = os.path.join(dirname, f"frame_{frame_id:06d}.jpg")
+            frame_id += 1
             cv2.imwrite(filename, frame)
             image = GenericImage(filename)
-            width, height = Image.open(filename).size
             image.tile = np.array([0, 0, width, height])
-            ann.add_image(image)
-            pred.add_image(image)
             viewer.set_image(image)
-            frame_id += 1
-        video.release()
-        composite.show(viewer, ann, pred)
-        video = cv2.VideoWriter(os.path.join(dirname+os.basename(pred.filename)+'.avi'), fourcc=cv2.VideoWriter_fourcc(*'XVID'))
-        for image in pred.images:
+            composite.show(viewer, ann, pred)
             fps = 'FPS = ' + "{0:.3f}".format(cv2.getTickFrequency()/ticks)
             viewer.text(image, fps, (20, np.shape(viewer.get_image(image))[0]-20), 0.5, (0, 255, 0))
-            frame = cv2.cvtColor(viewer.get_image(image), cv2.COLOR_RGB2BGR)
-            video.write(frame)
-        video.release()
+            frame = viewer.get_image(image)
+            vw.write(frame)
+        vw.release()
+        vc.release()
 
     # Print the best K results
     print("\n" + "=" * 70)
@@ -154,7 +155,7 @@ def main():
         print(f"  {'-'*8}  {'-'*8}  {'-'*7}  {'-'*20}")
         for action in shown:
             s, e = action.segment
-            print(f"  {s:>8.2f}  {e:>8.2f}  {action.score:>7.4f}  {action.label}")
+            print(f"  {s:>8.2f}  {e:>8.2f}  {action.score:>7.4f}  {action.label.name}")
     print('End of eccv26_tad_test')
 
 
