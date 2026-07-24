@@ -100,9 +100,31 @@ def main():
     ticks = cv2.getTickCount()
     composite.process(ann, pred)
     ticks = cv2.getTickCount() - ticks
-    shown = [action for action in pred.actions if action.score >= thresh]
-    if topk >= 0:
-        shown = shown[: topk]
+    if save_video:
+        video = cv2.VideoCapture(pred.filename)
+        frame_id = 0
+        while True:
+            ret, frame = video.read()
+            if not ret:
+                break
+            filename = os.path.join(dirname, f"frame_{frame_id:06d}.jpg")
+            cv2.imwrite(filename, frame)
+            image = GenericImage(filename)
+            width, height = Image.open(filename).size
+            image.tile = np.array([0, 0, width, height])
+            ann.add_image(image)
+            pred.add_image(image)
+            viewer.set_image(image)
+            frame_id += 1
+        video.release()
+        composite.show(viewer, ann, pred)
+        video = cv2.VideoWriter(os.path.join(dirname+os.basename(pred.filename)+'.avi'), fourcc=cv2.VideoWriter_fourcc(*'XVID'))
+        for image in pred.images:
+            fps = 'FPS = ' + "{0:.3f}".format(cv2.getTickFrequency()/ticks)
+            viewer.text(image, fps, (20, np.shape(viewer.get_image(image))[0]-20), 0.5, (0, 255, 0))
+            frame = cv2.cvtColor(viewer.get_image(image), cv2.COLOR_RGB2BGR)
+            video.write(frame)
+        video.release()
 
     # Print the best K results
     print("\n" + "=" * 70)
@@ -118,6 +140,9 @@ def main():
         for action in ann.actions:
             s, e = action.segment
             print(f"  {s:>8.2f}  {e:>8.2f}  {action.label.name}")
+    shown = [action for action in pred.actions if action.score >= thresh]
+    if topk >= 0:
+        shown = shown[: topk]
     print(
         f"\nPREDICTIONS (showing {len(shown)} of {len(pred.actions)}"
         f"{f', score >= {thresh}' if thresh > 0 else ''}):"
@@ -130,26 +155,6 @@ def main():
         for action in shown:
             s, e = action.segment
             print(f"  {s:>8.2f}  {e:>8.2f}  {action.score:>7.4f}  {action.label}")
-    if save_video:
-        video = cv2.VideoCapture(pred.filename)
-        frame_id = 0
-        while True:
-            ret, frame = video.read()
-            if not ret:
-                break
-            filename = os.path.join(dirname, f"frame_{frame_id:06d}.jpg")
-            print(filename)
-            cv2.imwrite(filename, frame)
-            img_pred = GenericImage(filename)
-            width, height = Image.open(filename).size
-            img_pred.tile = np.array([0, 0, width, height])
-            pred.add_image(img_pred)
-            viewer.set_image(img_pred)
-            frame_id += 1
-        video.release()
-        composite.show(viewer, ann, pred)
-        viewer.save(dirname)
-        composite.save(dirname, pred)
     print('End of eccv26_tad_test')
 
 
