@@ -8,9 +8,9 @@ import sys
 sys.path.append(os.getcwd())
 import cv2
 import copy
+import tempfile
 import numpy as np
 import importlib.util
-from PIL import Image
 from pathlib import Path
 from images_framework.src.constants import Modes
 from images_framework.src.datasets import Database
@@ -106,24 +106,23 @@ def main():
         fps = vc.get(cv2.CAP_PROP_FPS)
         width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(os.path.join(dirname, os.path.splitext(os.path.basename(pred.filename))[0]+'.avi'))
         vw = cv2.VideoWriter(os.path.join(dirname, os.path.splitext(os.path.basename(pred.filename))[0]+'.avi'), fourcc=cv2.VideoWriter_fourcc(*'XVID'), fps=fps, frameSize=(width, height))
-        frame_id = 0
+        tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
+        tmp_filename = tmp.name
+        tmp.close()
         while True:
             ret, frame = vc.read()
             if not ret:
                 break
-            filename = os.path.join(dirname, f"frame_{frame_id:06d}.jpg")
-            frame_id += 1
-            cv2.imwrite(filename, frame)
-            image = GenericImage(filename)
+            cv2.imwrite(tmp_filename, frame)
+            image = GenericImage(tmp_filename)
             image.tile = np.array([0, 0, width, height])
             viewer.set_image(image)
             composite.show(viewer, ann, pred)
             fps = 'FPS = ' + "{0:.3f}".format(cv2.getTickFrequency()/ticks)
             viewer.text(image, fps, (20, np.shape(viewer.get_image(image))[0]-20), 0.5, (0, 255, 0))
             frame = viewer.get_image(image)
-            vw.write(frame)
+            vw.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         vw.release()
         vc.release()
 

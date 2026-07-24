@@ -8,10 +8,10 @@ import sys
 sys.path.append(os.getcwd())
 import cv2
 import copy
+import tempfile
 import numpy as np
 import importlib.util
 from tqdm import tqdm
-from PIL import Image
 from pathlib import Path
 from opentad.utils import override_dataset_paths
 from opentad.datasets import build_dataset
@@ -107,25 +107,27 @@ def main():
         for action in pred.actions:
             result_dict["results"][video_name].append({'segment': list(action.segment), 'label': str(action.label), 'score': float(action.score)})
         if save_video:
-            video = cv2.VideoCapture(pred.filename)
-            frame_id = 0
+            vc = cv2.VideoCapture(pred.filename)
+            fps = vc.get(cv2.CAP_PROP_FPS)
+            width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            vw = cv2.VideoWriter(os.path.join(dirname, os.path.splitext(os.path.basename(pred.filename))[0]+'.avi'), fourcc=cv2.VideoWriter_fourcc(*'XVID'), fps=fps, frameSize=(width, height))
+            tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
+            tmp_filename = tmp.name
+            tmp.close()
             while True:
-                ret, frame = video.read()
+                ret, frame = vc.read()
                 if not ret:
                     break
-                filename = os.path.join(dirname, f"frame_{frame_id:06d}.jpg")
-                print(filename)
-                cv2.imwrite(filename, frame)
-                img_pred = GenericImage(filename)
-                width, height = Image.open(filename).size
-                img_pred.tile = np.array([0, 0, width, height])
-                pred.add_image(img_pred)
-                viewer.set_image(img_pred)
-                frame_id += 1
-            video.release()
-            composite.show(viewer, anns[i], pred)
-            viewer.save(dirname)
-            composite.save(dirname, pred)
+                cv2.imwrite(tmp_filename, frame)
+                image = GenericImage(tmp_filename)
+                image.tile = np.array([0, 0, width, height])
+                viewer.set_image(image)
+                composite.show(viewer, anns[i], pred)
+                frame = viewer.get_image(image)
+                vw.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            vw.release()
+            vc.release()
 
     # Compute metrics
     import wandb
