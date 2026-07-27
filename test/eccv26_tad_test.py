@@ -87,12 +87,12 @@ def main():
     if not cap.isOpened():
         cap.release()
         raise RuntimeError(f"Cannot open video file: {input_data}")
-    frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = float(cap.get(cv2.CAP_PROP_FPS))
     cap.release()
     ann = GenericVideo(filename=input_data)
-    ann.frames = frames
-    ann.duration = frames / fps if fps > 0 else 0.0
+    ann.frames = num_frames
+    ann.duration = num_frames / fps if fps > 0 else 0.0
     pred = copy.deepcopy(ann)
     for action in ground_truth:
         ann.add_action(TemporalCategory(label=categories[int(action['label'])], segment=tuple(action['segment'])))
@@ -103,24 +103,21 @@ def main():
     ticks = cv2.getTickCount() - ticks
     if save_video:
         vc = cv2.VideoCapture(pred.filename)
-        fps = vc.get(cv2.CAP_PROP_FPS)
         width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
         vw = cv2.VideoWriter(os.path.join(dirname, os.path.splitext(os.path.basename(pred.filename))[0]+'.avi'), fourcc=cv2.VideoWriter_fourcc(*'XVID'), fps=fps, frameSize=(width, height))
-        tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
-        tmp_filename = tmp.name
-        tmp.close()
-        while True:
+        for frame_idx in range(num_frames):
             ret, frame = vc.read()
             if not ret:
                 break
+            tmp_filename = os.path.join(tempfile.gettempdir(), f"{frame_idx:06d}.jpg")
             cv2.imwrite(tmp_filename, frame)
             image = GenericImage(tmp_filename)
             image.tile = np.array([0, 0, width, height])
+            ann.add_image(image)
+            pred.add_image(image)
             viewer.set_image(image)
             composite.show(viewer, ann, pred)
-            fps = 'FPS = ' + "{0:.3f}".format(cv2.getTickFrequency()/ticks)
-            viewer.text(image, fps, (20, np.shape(viewer.get_image(image))[0]-20), 0.5, (0, 255, 0))
             frame = viewer.get_image(image)
             vw.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         vw.release()
@@ -129,7 +126,7 @@ def main():
     # Print the best K results
     print("\n" + "=" * 70)
     print(f"VIDEO: {input_data}")
-    print(f"  duration: {ann.duration} s | frames: {frame}")
+    print(f"  duration: {ann.duration} s | frames: {ann.frames}")
     print("=" * 70)
     print(f"\nGROUND TRUTH ({len(ann.actions)} segments):")
     if len(ann.actions) == 0:
