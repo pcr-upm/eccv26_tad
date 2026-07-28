@@ -114,6 +114,8 @@ def main():
         for img_pred in pred.images:
             viewer.set_image(img_pred)
         composite.show(viewer, ann, pred)
+        fps = 'FPS = ' + "{0:.3f}".format(pred.frames / (ticks / cv2.getTickFrequency()))
+        viewer.text(pred.images[0], fps, (20, np.shape(viewer.get_image(pred.images[0]))[0] - 20), 0.5, (0, 255, 0))
         viewer.save(dirname, as_video=True, format='avi', fps=30, codec='XVID')
 
     # Print the best K results
