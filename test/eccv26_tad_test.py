@@ -83,16 +83,25 @@ def main():
     db = Database.__subclasses__()[next((idx for idx, subset in enumerate(datasets) if 'thumos' in subset), None)]()
     categories = db.get_categories()
     ground_truth = load_annotations(os.path.splitext(input_data)[0]+'.json')
+    ann = GenericVideo(filename=input_data)
     cap = cv2.VideoCapture(input_data)
     if not cap.isOpened():
-        cap.release()
         raise RuntimeError(f"Cannot open video file: {input_data}")
-    num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    ann.frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = float(cap.get(cv2.CAP_PROP_FPS))
+    ann.duration = ann.frames / fps if fps > 0 else 0.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    for frame_idx in range(ann.frames):
+        ret, frame = cap.read()
+        if not ret:
+            break
+        tmp_filename = os.path.join(tempfile.gettempdir(), f"{frame_idx:06d}.jpg")
+        cv2.imwrite(tmp_filename, frame)
+        image = GenericImage(tmp_filename)
+        image.tile = np.array([0, 0, width, height])
+        ann.add_image(image)
     cap.release()
-    ann = GenericVideo(filename=input_data)
-    ann.frames = num_frames
-    ann.duration = num_frames / fps if fps > 0 else 0.0
     pred = copy.deepcopy(ann)
     for action in ground_truth:
         ann.add_action(TemporalCategory(label=categories[int(action['label'])], segment=tuple(action['segment'])))
@@ -102,26 +111,10 @@ def main():
     composite.process(ann, pred)
     ticks = cv2.getTickCount() - ticks
     if save_video:
-        vc = cv2.VideoCapture(pred.filename)
-        width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        vw = cv2.VideoWriter(os.path.join(dirname, os.path.splitext(os.path.basename(pred.filename))[0]+'.avi'), fourcc=cv2.VideoWriter_fourcc(*'XVID'), fps=fps, frameSize=(width, height))
-        for frame_idx in range(num_frames):
-            ret, frame = vc.read()
-            if not ret:
-                break
-            tmp_filename = os.path.join(tempfile.gettempdir(), f"{frame_idx:06d}.jpg")
-            cv2.imwrite(tmp_filename, frame)
-            image = GenericImage(tmp_filename)
-            image.tile = np.array([0, 0, width, height])
-            ann.add_image(image)
-            pred.add_image(image)
-            viewer.set_image(image)
-            composite.show(viewer, ann, pred)
-            frame = viewer.get_image(image)
-            vw.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-        vw.release()
-        vc.release()
+        for img_pred in pred.images:
+            viewer.set_image(img_pred)
+        composite.show(viewer, ann, pred)
+        viewer.save_video(dirname, fps=30, codec='XVID', format='avi')
 
     # Print the best K results
     print("\n" + "=" * 70)
