@@ -86,7 +86,7 @@ def main():
     ann = GenericVideo(filename=input_data)
     cap = cv2.VideoCapture(input_data)
     if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video file: {input_data}")
+        raise RuntimeError(f'Cannot open video file: {input_data}')
     ann.frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = float(cap.get(cv2.CAP_PROP_FPS))
     ann.duration = ann.frames / fps if fps > 0 else 0.0
@@ -96,7 +96,7 @@ def main():
         ret, frame = cap.read()
         if not ret:
             break
-        tmp_filename = os.path.join(tempfile.gettempdir(), f"{frame_idx:06d}.jpg")
+        tmp_filename = os.path.join(tempfile.gettempdir(), f'{frame_idx:06d}.jpg')
         cv2.imwrite(tmp_filename, frame)
         image = GenericImage(tmp_filename)
         image.tile = np.array([0, 0, width, height])
@@ -114,7 +114,7 @@ def main():
         for img_pred in pred.images:
             viewer.set_image(img_pred)
         composite.show(viewer, ann, pred)
-        viewer.save_video(dirname, fps=30, codec='XVID', format='avi')
+        viewer.save(dirname, as_video=True, format='avi', fps=30, codec='XVID')
 
     # Print the best K results
     print("\n" + "=" * 70)

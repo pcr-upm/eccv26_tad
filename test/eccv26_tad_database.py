@@ -107,27 +107,10 @@ def main():
         for action in pred.actions:
             result_dict["results"][video_name].append({'segment': list(action.segment), 'label': str(action.label), 'score': float(action.score)})
         if save_video:
-            vc = cv2.VideoCapture(pred.filename)
-            fps = vc.get(cv2.CAP_PROP_FPS)
-            width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            vw = cv2.VideoWriter(os.path.join(dirname, os.path.splitext(os.path.basename(pred.filename))[0]+'.avi'), fourcc=cv2.VideoWriter_fourcc(*'XVID'), fps=fps, frameSize=(width, height))
-            tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
-            tmp_filename = tmp.name
-            tmp.close()
-            while True:
-                ret, frame = vc.read()
-                if not ret:
-                    break
-                cv2.imwrite(tmp_filename, frame)
-                image = GenericImage(tmp_filename)
-                image.tile = np.array([0, 0, width, height])
-                viewer.set_image(image)
-                composite.show(viewer, anns[i], pred)
-                frame = viewer.get_image(image)
-                vw.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-            vw.release()
-            vc.release()
+            for img_pred in pred.images:
+                viewer.set_image(img_pred)
+            composite.show(viewer, anns[i], pred)
+            viewer.save(dirname, as_video=True, format='avi', fps=30, codec='XVID')
 
     # Compute metrics
     import wandb
