@@ -8,8 +8,6 @@ import sys
 sys.path.append(os.getcwd())
 import cv2
 import copy
-import tempfile
-import numpy as np
 import importlib.util
 from tqdm import tqdm
 from pathlib import Path
@@ -19,7 +17,6 @@ from opentad.evaluations import build_evaluator
 from images_framework.src.constants import Modes
 from images_framework.src.datasets import Database
 from images_framework.src.composite import Composite
-from images_framework.src.annotations import GenericImage
 from images_framework.src.viewer import Viewer
 from src.eccv26_tad import ECCV26TAD
 
@@ -53,20 +50,25 @@ def parse_options():
     return unknown, ann_file, class_map, data_root, block_list, external_cls_path, save_video
 
 
-def load_annotations(config):
+def load_annotations(config, load_images=True):
     """
     Load ground truth annotations from test dataset.
     """
     test_dataset = build_dataset(config)
-    db = 'thumos' if config.type == 'ThumosSlidingDataset' else None
+    db = 'thumos' if config.type.startswith('Thumos') else 'anet' if config.type.startswith('Anet') else None
     datasets = [subclass().get_names() for subclass in Database.__subclasses__()]
     idx = [datasets.index(subset) for subset in datasets if db in subset]
     if len(idx) != 1:
         raise ValueError('Database does not exist')
-    anns = []
-    for i in tqdm(range(len(test_dataset.data_list)), file=sys.stdout):
-        seq = Database.__subclasses__()[idx[0]]().load_filename(test_dataset.data_path, db, test_dataset.data_list[i])
-        anns.append(seq)
+    database = Database.__subclasses__()[idx[0]]()
+    # A sliding dataset stores one entry per window, so several entries share the same video
+    anns, seen = [], set()
+    for entry in tqdm(test_dataset.data_list, file=sys.stdout):
+        video_name, video_info = entry[0], entry[1]
+        if video_name in seen:
+            continue
+        seen.add(video_name)
+        anns.append(database.load_filename(test_dataset.data_path, db, (video_name, video_info), load_images))
     return anns
 
 
@@ -80,7 +82,7 @@ def main():
     # Load vision components
     composite = Composite()
     sr = ECCV26TAD('')
-    #composite.add(sr)
+    composite.add(sr)
     sr.parse_options(unknown)
     sr.load(Modes.TEST)
     sr.cfg = override_dataset_paths(sr.cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
@@ -94,18 +96,20 @@ def main():
         Path(dirname).mkdir(parents=True, exist_ok=True)
 
     # Load annotations from test dataset
-    anns = load_annotations(sr.cfg.dataset.test)
+    anns = load_annotations(sr.cfg.dataset.test, load_images=save_video)
 
     # Process database
+    label_names = {name: sr.class_map[idx] for idx, name in sr.classes.items()}
     result_dict = {'results': {}}
     for i in tqdm(range(len(anns)), file=sys.stdout):
         pred = copy.deepcopy(anns[i])
-        pred.clear()
+        pred.categories.clear()
+        pred.actions.clear()
         sr.process(anns[i], pred)
         video_name = os.path.splitext(os.path.basename(pred.filename))[0]
         result_dict['results'].setdefault(video_name, [])
         for action in pred.actions:
-            result_dict["results"][video_name].append({'segment': list(action.segment), 'label': str(action.label), 'score': float(action.score)})
+            result_dict["results"][video_name].append({'segment': list(action.segment), 'label': label_names[action.label], 'score': float(action.score)})
         if save_video:
             for img_pred in pred.images:
                 viewer.set_image(img_pred)
