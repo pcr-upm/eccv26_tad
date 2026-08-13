@@ -212,9 +212,9 @@ model = dict(
             with_cp=True,
             total_frames=window_size * scale_factor,
             adapter_index=list(range(12)),
-            keep_rate=0.4,
+            keep_rate=0.6,
             adapter_conv_types=["2d_conv"] * 4 + ["sparse_conv"] * 8,
-            adapter_use_attn=0,
+            adapter_use_attn=1,
             n_landmarks=0,
         ),
         data_preprocessor=dict(

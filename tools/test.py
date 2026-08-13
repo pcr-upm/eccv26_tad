@@ -132,7 +132,15 @@ def main():
         # how EMA/the model were wrapped at save time; normalize before comparing/loading.
         consume_prefix_in_state_dict_if_present(state_dict, prefix="module.")
         state_dict = remap_legacy_sparse_conv_weights(state_dict, model.module.state_dict())
-        model.module.load_state_dict(state_dict)
+        missing, unexpected = model.module.load_state_dict(state_dict, strict=False)
+        if missing:
+            logger.info(f"Missing keys in checkpoint: {len(missing)} keys")
+            for k in missing:
+                logger.info(f"  - {k}")
+        if unexpected:
+            logger.info(f"Unexpected keys in checkpoint: {len(unexpected)} keys")
+            for k in unexpected:
+                logger.info(f"  - {k}")
         if use_ema:
             logger.info("Using Model EMA...")
 

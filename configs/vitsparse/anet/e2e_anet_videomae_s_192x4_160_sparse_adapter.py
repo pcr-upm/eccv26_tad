@@ -198,7 +198,7 @@ post_processing = dict(
     ),
     external_cls=dict(
         type="CUHKANETClassifier",
-        path="data/activitynet-1.3/classifiers/cuhk_val_simp_7.json",
+        path="/datasets/activitynet-1.3/classifiers/cuhk_val_simp_7.json",
         topk=2,
     ),
     save_dict=False,
@@ -212,4 +212,4 @@ workflow = dict(
     val_start_epoch=8,
 )
 
-work_dir = "exps/anet/adatad/e2e_actionformer_videomae_s_192x4_160_sparse_adapter"
+work_dir = "exps/anet/vitsparse/e2e_actionformer_videomae_s_192x4_160_sparse_adapter"

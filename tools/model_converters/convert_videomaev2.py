@@ -9,6 +9,7 @@ register_all_modules()
 
 
 def process_checkpoint(in_path, out_path, arch, num_classes):
+    already_prefixed = False
     if in_path.endswith(".safetensors"):
         from safetensors.torch import load_file
 
@@ -16,7 +17,22 @@ def process_checkpoint(in_path, out_path, arch, num_classes):
         print("Loaded safetensors checkpoint with keys:", video_state_dict.keys())
     else:
         videomae_checkpoint = torch.load(in_path, map_location="cpu")
-        video_state_dict = videomae_checkpoint["module"]
+        if "module" in videomae_checkpoint:
+            # raw VideoMAEv2 release format, e.g. vit_g_hybrid_pt_1200e.pth
+            video_state_dict = videomae_checkpoint["module"]
+        elif "state_dict" in videomae_checkpoint:
+            # mmaction-style training checkpoint (meta/state_dict/optimizer),
+            # e.g. some checkpoints mirrored on the OpenGVLab/VideoMAE2 HF repo.
+            # Keys are already "backbone."-prefixed and may include a
+            # finetuned cls_head for an unrelated task/dataset.
+            video_state_dict = videomae_checkpoint["state_dict"]
+            already_prefixed = True
+            print(
+                "Loaded mmaction-style checkpoint (state_dict/meta/optimizer); "
+                "treating keys as already backbone-prefixed."
+            )
+        else:
+            video_state_dict = videomae_checkpoint
 
     if arch == "small":
         model_cfg = dict(
@@ -165,10 +181,16 @@ def process_checkpoint(in_path, out_path, arch, num_classes):
     # video_state_dict is already loaded
 
     new_state_dict = {}
+    model_state_dict = model.state_dict()
     for key, value in video_state_dict.items():
         # Strip 'model.' prefix if present (common in safetensors from HF)
         if key.startswith("model."):
             key = key[6:]
+
+        # mmaction-style checkpoints already have the "backbone." prefix
+        # (and a "cls_head." prefix for the head, which is left untouched)
+        if already_prefixed and key.startswith("backbone."):
+            key = key[len("backbone."):]
 
         # convert keys
         if "fc1" in key:
@@ -177,13 +199,21 @@ def process_checkpoint(in_path, out_path, arch, num_classes):
             key = key.replace("fc2", "layers.1")
         elif "patch_embed.proj" in key:
             key = key.replace("patch_embed.proj", "patch_embed.projection")
-        elif "head" in key:
+        elif "head" in key and not key.startswith("cls_head"):
             key = key.replace("head", "cls_head.fc_cls")
 
-        if "backbone." + key in model.state_dict().keys():  # blocks.0.xxx
-            new_state_dict["backbone." + key] = value
-        elif key.startswith("cls_head") and key in model.state_dict().keys():
-            new_state_dict[key] = value
+        if "backbone." + key in model_state_dict:  # blocks.0.xxx
+            candidate = "backbone." + key
+        elif key.startswith("cls_head") and key in model_state_dict:
+            candidate = key
+        else:
+            continue
+
+        if model_state_dict[candidate].shape != value.shape:
+            # e.g. a cls_head finetuned for a different number of classes
+            print(f"Skipping {candidate}: shape mismatch {model_state_dict[candidate].shape} vs {value.shape}")
+            continue
+        new_state_dict[candidate] = value
 
     print("The following keys exist in model_cfg but not in the new checkpoint:")
     for key, value in model.state_dict().items():

@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..bricks import ConvModule, TransformerBlock
+from ..bricks import ConvModule, TransformerBlock, TemporalFreqConv1D
 from ..builder import PROJECTIONS
 
 
@@ -21,6 +21,8 @@ class Conv1DTransformerProj(nn.Module):
         use_abs_pe=False,  # use absolute position embedding
         max_seq_len=2304,
         input_pdrop=0.0,  # drop out the input feature
+        use_freq=False,  # add a temporal-frequency conv after the embed stem
+        freq_cfg=None,  # kwargs for TemporalFreqConv1D (kernel_size, freq_windows, ...)
     ):
         super().__init__()
         assert len(arch) == 3
@@ -84,6 +86,11 @@ class Conv1DTransformerProj(nn.Module):
                 )
             )
 
+        # temporal-frequency conv applied at full resolution after the embed stem
+        self.use_freq = use_freq
+        if self.use_freq:
+            self.freq = TemporalFreqConv1D(out_channels, **(freq_cfg or {}))
+
         # stem network using (vanilla) transformer
         self.stem = nn.ModuleList()
         for idx in range(arch[1]):
@@ -138,6 +145,10 @@ class Conv1DTransformerProj(nn.Module):
         # embedding network
         for idx in range(len(self.embed)):
             x, mask = self.embed[idx](x, mask)
+
+        # temporal-frequency conv (residual, gated) at full resolution
+        if self.use_freq:
+            x = x + self.freq(x, mask)
 
         # training: using fixed length position embeddings
         if self.use_abs_pe and self.training:

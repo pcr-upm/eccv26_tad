@@ -11,6 +11,10 @@ from opentad.models.utils.post_processing import build_classifier, batched_nms
 from opentad.evaluations import build_evaluator
 from opentad.datasets.base import SlidingWindowDataset
 
+# Running best of each scalar eval metric, used to emit flat monotonic
+# "best_*" metrics for sweep controllers (see the wandb.log call below).
+_BEST_METRICS = {}
+
 
 def eval_one_epoch(
     test_loader,
@@ -56,7 +60,7 @@ def eval_one_epoch(
     model.eval()
     result_dict = {}
     for data_dict in tqdm.tqdm(test_loader, disable=(rank != 0)):
-        with torch.cuda.amp.autocast(dtype=torch.float16, enabled=use_amp):
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=use_amp):
             with torch.no_grad():
                 results = model(
                     **data_dict,
@@ -96,8 +100,12 @@ def eval_one_epoch(
             metrics_dict = evaluator.evaluate()
             evaluator.logging(logger)
 
-            # Log metrics to wandb
-            wandb.log(metrics_dict)
+            log_dict = dict(metrics_dict)
+            for _k, _v in metrics_dict.items():
+                if isinstance(_v, (int, float)) and not isinstance(_v, bool):
+                    _BEST_METRICS[_k] = max(_BEST_METRICS.get(_k, float("-inf")), float(_v))
+                    log_dict[f"best_{_k}"] = _BEST_METRICS[_k]
+            wandb.log(log_dict)
             if not training:
                 # Log results table to wandb
                 columns = ["video-id", "segment", "label", "score"]

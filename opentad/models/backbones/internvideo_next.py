@@ -6,6 +6,7 @@ to integrate with the OpenTAD framework using mmengine's module registration.
 """
 
 import math
+import os
 from functools import partial
 from typing import Dict, List, Optional, Union
 
@@ -24,6 +25,49 @@ from mmengine.registry import MODELS
 
 # Import adapter and HeatmapHead from vit_sparse_adapter_poguise
 from .vit_sparse_adapter_poguise import EfficientAdapter, HeatmapHead
+
+
+# =============================================================================
+# Sparse-conv / token-pruning debug validation
+# =============================================================================
+# When enabled (env var OPENTAD_DEBUG_SPARSE=1), the neighbor-index bookkeeping
+# is validated after every token-pruning step. This turns the otherwise opaque
+# CUDA "device-side assert triggered" (raised deep inside the sparse_conv kernel
+# on an out-of-bounds index) into an explicit, localized Python error. The
+# checks force host<->device syncs and so are OFF by default.
+_DEBUG_SPARSE = os.environ.get("OPENTAD_DEBUG_SPARSE", "0") == "1"
+
+
+def _validate_neighbor_indices(neighbor_indices, num_tokens, where=""):
+    """Assert that neighbor indices are consistent with the current token count.
+
+    Args:
+        neighbor_indices: (B, N, 9) long tensor, -1 for invalid neighbors, other
+            entries are GLOBAL indices in [0, B*N) (batch offsets baked in).
+        num_tokens: N, the current number of patch tokens per sample.
+        where: context string for the error message.
+    """
+    if neighbor_indices is None:
+        return
+    B, N, K = neighbor_indices.shape
+    if N != num_tokens:
+        raise RuntimeError(
+            f"[sparse-conv check @ {where}] neighbor_indices second dim ({N}) "
+            f"!= current patch-token count ({num_tokens}). neighbor_indices is "
+            f"out of sync with the pruned token set."
+        )
+    valid = neighbor_indices[neighbor_indices != -1]
+    if valid.numel() > 0:
+        vmin = int(valid.min().item())
+        vmax = int(valid.max().item())
+        upper = B * N
+        if vmin < 0 or vmax >= upper:
+            raise RuntimeError(
+                f"[sparse-conv check @ {where}] neighbor index out of bounds: "
+                f"min={vmin}, max={vmax}, valid range [0, {upper}) for "
+                f"B={B}, N={N}. Stale/invalid mapping would trigger a CUDA "
+                f"device-side assert in the sparse_conv kernel."
+            )
 
 
 # =============================================================================
@@ -407,6 +451,10 @@ class PreAttentionTokenPruner(nn.Module):
             neighbor_indices_pruned = self._update_neighbor_indices(
                 neighbor_indices, keep_indices, B, num_patches, num_keep
             )
+            if _DEBUG_SPARSE:
+                _validate_neighbor_indices(
+                    neighbor_indices_pruned, num_keep, where="PreAttnPruner"
+                )
 
         return x_pruned, idx_pruned, neighbor_indices_pruned, selection_weights
 
@@ -1318,8 +1366,17 @@ class Block(nn.Module):
                     if idx is not None:
                         idx = torch.gather(idx, dim=1, index=new_idx)
 
-                    # Update neighbor indices for sparse conv
-                    if neighbor_indices is not None and self.needs_neighbor_indices:
+                    # Update neighbor indices for sparse conv.
+                    # NOTE: this must run at EVERY token-pruning block whenever
+                    # neighbor_indices exists (i.e. the model uses sparse_conv
+                    # somewhere), NOT only when *this* block carries a sparse_conv
+                    # adapter. Token pruning (keep_rate<1) happens at fixed blocks
+                    # (token_selection_index) independent of adapter_index; if a
+                    # pruning block has no adapter and we skip this update, idx and
+                    # the token tensor shrink while neighbor_indices keeps pointing
+                    # at the full grid, so the next sparse_conv adapter indexes out
+                    # of bounds -> CUDA device-side assert.
+                    if neighbor_indices is not None:
                         neighbor_indices = self._update_neighbor_indices(
                             neighbor_indices,
                             new_idx,
@@ -1327,6 +1384,12 @@ class Block(nn.Module):
                             x_patches.shape[1],
                             x_patches_kept.shape[1],
                         )
+                        if _DEBUG_SPARSE:
+                            _validate_neighbor_indices(
+                                neighbor_indices,
+                                x_patches_kept.shape[1],
+                                where="Block.token_prune",
+                            )
 
                     # Concatenate back
                     x = torch.cat([x_cls, x_patches_kept], dim=1)
@@ -1360,6 +1423,12 @@ class Block(nn.Module):
 
             # Apply adapter after MLP if enabled
             if self.use_adapter and idx is not None:
+                if _DEBUG_SPARSE and self.needs_neighbor_indices:
+                    _validate_neighbor_indices(
+                        neighbor_indices,
+                        idx.shape[1],
+                        where="Block.adapter_input",
+                    )
                 x = self.adapter(x, h, w, idx, total_num_patches, neighbor_indices)
 
             return x, idx, neighbor_indices

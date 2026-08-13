@@ -19,6 +19,69 @@ import matplotlib.pyplot as plt
 matplotlib.use("Agg")  # Set the backend before importing pyplot
 
 
+def _tensor_is_nonfinite(x):
+    """True if x is a tensor (or contains one) with any NaN/Inf."""
+    if isinstance(x, Tensor):
+        return x.numel() > 0 and not torch.isfinite(x).all()
+    if isinstance(x, (list, tuple)):
+        return any(_tensor_is_nonfinite(v) for v in x)
+    if isinstance(x, dict):
+        return any(_tensor_is_nonfinite(v) for v in x.values())
+    return False
+
+
+def attach_nan_localizer(model, logger):
+    """Register forward hooks that name the FIRST module to emit a non-finite output.
+
+    Opt-in via env OPENTAD_DEBUG_NAN=1. On the first module whose output is
+    non-finite it logs the module's qualified name + class, and whether the
+    module's *input* was already non-finite (propagated vs. produced here), then
+    raises so the offending layer is reported immediately instead of the loop
+    silently skipping 20 batches. Forces host<->device syncs, so debug-only.
+    """
+    state = {"tripped": False}
+
+    def make_hook(name, module):
+        def hook(_m, inputs, output):
+            if state["tripped"]:
+                return
+            if _tensor_is_nonfinite(output):
+                state["tripped"] = True
+                in_bad = _tensor_is_nonfinite(inputs)
+                origin = "PROPAGATED (input already non-finite)" if in_bad else "PRODUCED HERE (input finite)"
+                msg = (
+                    f"[NaN-localizer] first non-finite output at module "
+                    f"'{name}' ({module.__class__.__name__}) -- {origin}"
+                )
+                logger.error(msg)
+                raise FloatingPointError(msg)
+
+        return hook
+
+    n = 0
+    for name, module in model.named_modules():
+        if len(list(module.children())) > 0:  # leaf modules only
+            continue
+        module.register_forward_hook(make_hook(name, module))
+        n += 1
+    logger.warning(f"[NaN-localizer] OPENTAD_DEBUG_NAN=1: hooked {n} leaf modules (debug-only, slows training).")
+
+
+@torch.no_grad()
+def _global_grad_norm(parameters):
+    """L2 norm over all parameter grads (NaN/Inf if any grad is non-finite).
+
+    Mirrors what clip_grad_norm_ returns, for the code path where gradient
+    clipping is disabled but we still want to detect non-finite gradients.
+    """
+    grads = [p.grad for p in parameters if p.grad is not None]
+    if len(grads) == 0:
+        return torch.tensor(0.0)
+    return torch.norm(
+        torch.stack([torch.norm(g.detach(), 2) for g in grads]), 2
+    )
+
+
 def unnormalize_image(
     tensor, mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375]
 ):
@@ -583,11 +646,18 @@ def train_one_epoch(
     logger.info("[Train]: Epoch {:d} started".format(curr_epoch))
     losses_tracker = {}
     num_iters = len(train_loader)
+    # Non-finite (NaN/Inf) loss/grad handling: skip the offending batch instead of
+    # letting it corrupt the weights (bf16 training has no GradScaler to skip for
+    # us). Abort only if too many happen back-to-back, which signals real divergence.
+    consecutive_nan = 0
+    max_consecutive_nan = 20
     keypoint_loss_fn = KeypointMSELoss(loss_weight=2.0)
     heatmap_generator = UDPHeatmap(
         input_size=(160, 160), heatmap_size=(56, 56), sigma=1.5
     )
     model.train()
+    if os.environ.get("OPENTAD_DEBUG_NAN") == "1":
+        attach_nan_localizer(model, logger)
     for iter_idx, data_dict in enumerate(train_loader):
         optimizer.zero_grad()
         # print(data_dict['metas'])
@@ -624,45 +694,82 @@ def train_one_epoch(
             losses["loss_heatmap"] = loss_heatmap
             losses["cost"] += loss_heatmap
         # visualize_and_log_batch(data_dict, gt_heatmaps)
-        # compute the gradients
-        if scaler is not None:
-            scaler.scale(losses["cost"]).backward()
-        else:
-            losses["cost"].backward()
+        # If the loss itself is already non-finite, skip this batch entirely:
+        # do not backward/step, so NaN/Inf never reaches the weights or EMA.
+        loss_is_finite = torch.isfinite(losses["cost"]).all()
 
-        # gradient clipping (to stabilize training if necessary)
-        if clip_grad_l2norm > 0.0:
+        if loss_is_finite:
+            # compute the gradients
             if scaler is not None:
-                scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_l2norm)
+                scaler.scale(losses["cost"]).backward()
+            else:
+                losses["cost"].backward()
 
-        # update parameters
-        if scaler is not None:
-            scaler.step(optimizer)
-            scaler.update()
+            # gradient clipping (to stabilize training if necessary)
+            if clip_grad_l2norm > 0.0:
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), clip_grad_l2norm
+                )
+            else:
+                grad_norm = _global_grad_norm(model.parameters())
+
+            # grad_norm is NaN/Inf iff some gradient is non-finite; skip the step
+            # in that case (bf16 path has scaler=None, so nothing else guards this).
+            grads_finite = bool(torch.isfinite(grad_norm))
         else:
-            optimizer.step()
-        # update scheduler
-        scheduler.step()
-        # update ema
-        if model_ema is not None:
-            model_ema.update(model.module)
+            grads_finite = False
 
-        # track all losses
+        if loss_is_finite and grads_finite:
+            consecutive_nan = 0
+            # update parameters
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            # update ema
+            if model_ema is not None:
+                model_ema.update(model.module)
+        else:
+            # Skip the offending batch: drop its grads, leave weights/EMA intact.
+            optimizer.zero_grad(set_to_none=True)
+            consecutive_nan += 1
+            reason = "loss" if not loss_is_finite else "gradient"
+            # Name the offending term on the first occurrence: which component is
+            # non-finite (cls / reg / aux_cls / ...) says whether the model itself
+            # diverged or only one loss term is broken.
+            detail = ""
+            if consecutive_nan == 1 and not loss_is_finite:
+                detail = " components: " + ", ".join(
+                    f"{k}={v.detach().float().mean().item():.4g}"
+                    for k, v in losses.items()
+                    if torch.is_tensor(v)
+                )
+            logger.warning(
+                f"[Train]: non-finite {reason} at epoch {curr_epoch} "
+                f"iter {iter_idx}; skipping batch "
+                f"({consecutive_nan}/{max_consecutive_nan} consecutive).{detail}"
+            )
+            if consecutive_nan >= max_consecutive_nan:
+                raise ValueError(
+                    f"Loss/grad non-finite for {consecutive_nan} consecutive "
+                    f"batches at epoch {curr_epoch}; aborting (training diverged)."
+                )
+
+        # update scheduler (kept per-iteration so the LR schedule length is
+        # unchanged whether or not the step above was skipped)
+        scheduler.step()
+
+        # track all losses (skip non-finite values so averages stay meaningful)
         losses = reduce_loss(losses)  # only for log
         for key, value in losses.items():
+            if not torch.isfinite(value).all():
+                continue
             if key not in losses_tracker:
                 losses_tracker[key] = AverageMeter()
             losses_tracker[key].update(value.item())
-            # if loss is nan throw error
-            if torch.isnan(value).all():
-                print(f"NaN detected in loss component: {key}")
-                if key == "loss_heatmap":
-                    if torch.isnan(heatmap_pred).any():
-                        print("heatmap_pred contains NaNs")
-                    if torch.isnan(gt_heatmaps).any():
-                        print("gt_heatmaps contains NaNs")
-                raise ValueError(f"Loss {key} is NaN")
 
         # printing each logging_interval
         if ((iter_idx != 0) and (iter_idx % logging_interval) == 0) or (

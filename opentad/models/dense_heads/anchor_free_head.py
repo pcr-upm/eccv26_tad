@@ -25,6 +25,9 @@ class AnchorFreeHead(nn.Module):
         cls_prior_prob=0.01,
         loss_weight=1.0,
         filter_similar_gt=True,
+        aux_cls_loss_weight=0.0,
+        aux_cls_loss_mode="crossclass",
+        aux_bg_weight=1.0,
     ):
         super(AnchorFreeHead, self).__init__()
 
@@ -35,6 +38,10 @@ class AnchorFreeHead(nn.Module):
         self.cls_prior_prob = cls_prior_prob
         self.label_smoothing = label_smoothing
         self.filter_similar_gt = filter_similar_gt
+        self.aux_cls_loss_weight = aux_cls_loss_weight
+        assert aux_cls_loss_mode in ("crossclass", "background"), aux_cls_loss_mode
+        self.aux_cls_loss_mode = aux_cls_loss_mode
+        self.aux_bg_weight = aux_bg_weight
 
         self.loss_weight = loss_weight
         self.center_sample = center_sample
@@ -88,6 +95,9 @@ class AnchorFreeHead(nn.Module):
                 )
             )
 
+    def _use_bg_aux(self):
+        return self.aux_cls_loss_weight > 0 and self.aux_cls_loss_mode == "background"
+
     def _init_heads(self):
         """Initialize predictor layers of the head."""
         self.cls_head = nn.Conv1d(self.feat_channels, self.num_classes, kernel_size=3, padding=1)
@@ -100,9 +110,17 @@ class AnchorFreeHead(nn.Module):
             bias_value = -(math.log((1 - self.cls_prior_prob) / self.cls_prior_prob))
             nn.init.constant_(self.cls_head.bias, bias_value)
 
+        # Auxiliary background-sink logit for the "background" aux mode. Trained
+        # only by the aux softmax CE (never used at inference), it is the target
+        # class at negative locations so the aux gradient pushes all num_classes
+        # action logits down on background timesteps.
+        if self._use_bg_aux():
+            self.aux_bg_head = nn.Conv1d(self.feat_channels, 1, kernel_size=3, padding=1)
+
     def forward_train(self, feat_list, mask_list, gt_segments, gt_labels, **kwargs):
         cls_pred = []
         reg_pred = []
+        bg_pred = [] if self._use_bg_aux() else None
 
         for l, (feat, mask) in enumerate(zip(feat_list, mask_list)):
             cls_feat = feat
@@ -114,10 +132,12 @@ class AnchorFreeHead(nn.Module):
 
             cls_pred.append(self.cls_head(cls_feat))
             reg_pred.append(F.relu(self.scale[l](self.reg_head(reg_feat))))
+            if bg_pred is not None:
+                bg_pred.append(self.aux_bg_head(cls_feat))
 
         points = self.prior_generator(feat_list)
 
-        losses = self.losses(cls_pred, reg_pred, mask_list, points, gt_segments, gt_labels)
+        losses = self.losses(cls_pred, reg_pred, mask_list, points, gt_segments, gt_labels, bg_pred=bg_pred)
         return losses
 
     def forward_test(self, feat_list, mask_list, **kwargs):
@@ -164,7 +184,7 @@ class AnchorFreeHead(nn.Module):
             new_scores.append(score[mask])  # [T,num_classes]
         return new_proposals, new_scores
 
-    def losses(self, cls_pred, reg_pred, mask_list, points, gt_segments, gt_labels):
+    def losses(self, cls_pred, reg_pred, mask_list, points, gt_segments, gt_labels, bg_pred=None):
         gt_cls, gt_reg = self.prepare_targets(points, gt_segments, gt_labels)
 
         # positive mask
@@ -184,16 +204,31 @@ class AnchorFreeHead(nn.Module):
             loss_normalizer = max(num_pos, 1)
 
         # 1. classification loss
-        cls_pred = [x.permute(0, 2, 1) for x in cls_pred]
-        cls_pred = torch.cat(cls_pred, dim=1)[valid_mask]
+        cls_pred = torch.cat([x.permute(0, 2, 1) for x in cls_pred], dim=1)  # [B,T,C]
         gt_target = gt_cls[valid_mask]
 
         # optional label smoothing
         gt_target *= 1 - self.label_smoothing
         gt_target += self.label_smoothing / (self.num_classes + 1)
 
-        cls_loss = self.cls_loss(cls_pred, gt_target, reduction="sum")
+        cls_loss = self.cls_loss(cls_pred[valid_mask], gt_target, reduction="sum")
         cls_loss /= loss_normalizer
+
+        # 1b. auxiliary softmax CE: the per-class sigmoids never compete, so a
+        # runner-up class (crossclass) or an action class on background
+        # (background) can keep a high score. A softmax over the logits imposes
+        # the competition the sigmoids lack.
+        if self.aux_cls_loss_weight > 0:
+            if self.aux_cls_loss_mode == "background":
+                aux_cls_loss = self._aux_background_loss(cls_pred, bg_pred, gt_cls, valid_mask, pos_mask, num_pos)
+            elif num_pos > 0:
+                # crossclass: softmax over the C action logits at positives only
+                aux_target = gt_cls[pos_mask]  # [P,C] multi-hot (>=1 class)
+                aux_target = aux_target / aux_target.sum(dim=-1, keepdim=True)
+                aux_logp = F.log_softmax(cls_pred[pos_mask], dim=-1)
+                aux_cls_loss = -(aux_target * aux_logp).sum(dim=-1).sum() / loss_normalizer
+            else:
+                aux_cls_loss = cls_pred.sum() * 0
 
         # 2. regression using IoU/GIoU/DIOU loss (defined on positive samples)
         split_size = [reg.shape[-1] for reg in reg_pred]
@@ -212,7 +247,33 @@ class AnchorFreeHead(nn.Module):
         else:
             loss_weight = cls_loss.detach() / max(reg_loss.item(), 0.01)
 
-        return {"cls_loss": cls_loss, "reg_loss": reg_loss * loss_weight}
+        losses = {"cls_loss": cls_loss, "reg_loss": reg_loss * loss_weight}
+        if self.aux_cls_loss_weight > 0:
+            losses["aux_cls_loss"] = aux_cls_loss * self.aux_cls_loss_weight
+        return losses
+
+    def _aux_background_loss(self, cls_pred, bg_pred, gt_cls, valid_mask, pos_mask, num_pos):
+        """(C+1)-way softmax CE with a background-sink logit.
+
+        """
+        bg_pred = torch.cat([x.permute(0, 2, 1) for x in bg_pred], dim=1)  # [B,T,1]
+        logits = torch.cat([cls_pred, bg_pred], dim=-1)  # [B,T,C+1]
+        logp = F.log_softmax(logits, dim=-1)
+
+        if num_pos > 0:
+            pos_t = gt_cls[pos_mask]  # [P,C] multi-hot (>=1 class)
+            pos_t = pos_t / pos_t.sum(dim=-1, keepdim=True)
+            ce_pos = -(pos_t * logp[pos_mask][:, : self.num_classes]).sum(dim=-1).mean()
+        else:
+            ce_pos = logits.sum() * 0
+
+        neg_mask = torch.logical_and(valid_mask, ~pos_mask)
+        if neg_mask.any():
+            ce_neg = -logp[neg_mask][:, -1].mean()  # sink is the last logit
+        else:
+            ce_neg = logits.sum() * 0
+
+        return ce_pos + self.aux_bg_weight * ce_neg
 
     @torch.no_grad()
     def prepare_targets(self, points, gt_segments, gt_labels):

@@ -1,7 +1,7 @@
 dataset_type = "ThumosSlidingDataset"
-annotation_path = "/media/ricardo/data/datasets/THUMOS14/annotations/thumos_14_anno.json"
-class_map = "/media/ricardo/data/datasets/THUMOS14/annotations/category_idx.txt"
-data_path = "/media/ricardo/data/datasets/THUMOS14/raw_data/video"
+annotation_path = "/datasets/THUMOS14/annotations/thumos_14_anno.json"
+class_map = "/datasets/THUMOS14/annotations/category_idx.txt"
+data_path = "/datasets/THUMOS14/raw_data/video"
 block_list = None
 
 window_size = 256

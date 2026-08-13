@@ -177,6 +177,33 @@ class Rearrange:
 
 
 @PIPELINES.register_module()
+class TemporalSlice:
+    """Slice a tensor along one dim, e.g. drop a CLS slot spliced into the time axis.
+
+    InternVideoNextBackbone (return_feat_map=False) returns (B, C, T+1) per chunk
+    with the CLS token at temporal position 0; use start=1 on dim=-1 to remove it
+    before chunks are re-assembled into the full timeline.
+    """
+
+    def __init__(self, keys, dim=-1, start=0, end=None):
+        self.keys = keys
+        self.dim = dim
+        self.start = start
+        self.end = end
+
+    def __call__(self, results):
+        for key in self.keys:
+            x = results[key]
+            sl = [slice(None)] * x.ndim
+            sl[self.dim] = slice(self.start, self.end)
+            results[key] = x[tuple(sl)]
+        return results
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(keys={self.keys}, dim={self.dim}, start={self.start}, end={self.end})"
+
+
+@PIPELINES.register_module()
 class Reduce:
     def __init__(self, keys, ops, reduction):
         self.keys = keys

@@ -123,7 +123,7 @@ model = dict(
             # Adapter configuration
             adapter_index=list(range(24)),  # Adapters at all layers
             adapter_conv_type=["2d_conv"] * 3 + ["sparse_conv"] * 21,
-            keep_rate=0.6,
+            keep_rate=0.7,
             adapter_mlp_ratio=0.25,
             adapter_use_attn=3,
             token_selection_index=[3, 7, 11, 15,], # Insert adapter after these blocks
@@ -190,7 +190,7 @@ model = dict(
 
 solver = dict(
     train=dict(
-        batch_size=16,  # Must be divisible by world_size (4 GPUs)
+        batch_size=8,  # Must be divisible by world_size (4 GPUs)
         num_workers=16,
         persistent_workers=True,
         prefetch_factor=8,
@@ -205,7 +205,7 @@ solver = dict(
         multiprocessing_context="spawn",
     ),
     test=dict(
-        batch_size=16,
+        batch_size=8,
         num_workers=16,
         persistent_workers=False,
         prefetch_factor=8,  
@@ -248,7 +248,7 @@ post_processing = dict(
     ),
     external_cls=dict(
         type="CUHKANETClassifier",
-        path="/home/jmbuenaposada/ricardo/datasets/activitynet-1.3/classifiers/cuhk_val_simp_7.json",
+        path="/datasets/activitynet-1.3/classifiers/cuhk_val_simp_7.json",
         topk=2,
     ),
     save_dict=False,

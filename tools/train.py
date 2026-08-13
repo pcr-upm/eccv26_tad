@@ -117,7 +117,7 @@ def main():
     dist.init_process_group("nccl", rank=args.rank, world_size=args.world_size)
 
     # set random seed, create work_dir, and save config
-    set_seed(args.seed, True)
+    set_seed(args.seed, args.disable_deterministic)
     cfg = update_workdir(cfg, args.id, args.world_size)
     if args.rank == 0:
         create_folder(cfg.work_dir)
@@ -283,6 +283,8 @@ def main():
                 )
 
         # val for one epoch and early stopping check
+        # None = no val loss computed this epoch, so eval falls back to its interval
+        val_loss_improved = None
         if epoch >= val_start_epoch:
             if (cfg.workflow.val_loss_interval > 0) and (
                 (epoch + 1) % cfg.workflow.val_loss_interval == 0
@@ -307,6 +309,7 @@ def main():
                         )
                         val_loss_best = val_loss  # Update the best loss
                         epochs_no_improve = 0  # Reset counter
+                        val_loss_improved = True
                         if args.rank == 0:
                             # Save the best model only when significant improvement is observed
                             save_best_checkpoint(
@@ -315,6 +318,7 @@ def main():
                     else:
                         # No significant improvement, increment counter
                         epochs_no_improve += 1
+                        val_loss_improved = False
                         logger.info(
                             f"Validation loss did not improve significantly. Early stopping counter: {epochs_no_improve}/{early_stopping_patience}."
                         )
@@ -332,13 +336,17 @@ def main():
                             f"New best epoch {epoch} based on val_loss: {val_loss:.4f}."
                         )
                         val_loss_best = val_loss
+                        val_loss_improved = True
                         if args.rank == 0:
                             save_best_checkpoint(
                                 model, model_ema, epoch, work_dir=cfg.work_dir
                             )
+                    else:
+                        val_loss_improved = False
 
         # eval for one epoch (evaluation metrics, not for early stopping loss)
-        if epoch >= val_start_epoch:
+        # skipped when the val loss did not improve this epoch
+        if epoch >= val_start_epoch and val_loss_improved is not False:
             if (cfg.workflow.val_eval_interval > 0) and (
                 (epoch + 1) % cfg.workflow.val_eval_interval == 0
             ):
@@ -354,6 +362,10 @@ def main():
                     not_eval=args.not_eval,
                     training=True,
                 )
+        elif val_loss_improved is False and (cfg.workflow.val_eval_interval > 0) and (
+            (epoch + 1) % cfg.workflow.val_eval_interval == 0
+        ):
+            logger.info(f"Skipping evaluation at epoch {epoch}: val_loss did not improve.")
     logger.info("Training Over...\n")
 
     # Load best model if exists

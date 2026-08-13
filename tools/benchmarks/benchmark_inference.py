@@ -61,6 +61,11 @@ def parse_args():
         "--use-amp", action="store_true", help="use automatic mixed precision"
     )
     parser.add_argument(
+        "--gflops-only",
+        action="store_true",
+        help="only calculate and print GFLOPs, skip the timing benchmark",
+    )
+    parser.add_argument(
         "--measure-adapter",
         action="store_true",
         help="measure adapter module timing separately",
@@ -616,6 +621,9 @@ def main():
         print(f"Model GFLOPs: {gflops:.2f}")
     else:
         print("GFLOPs calculation skipped or failed")
+
+    if args.gflops_only:
+        return
 
     # Reset peak memory stats after GFLOPs calculation to get accurate benchmark memory
     if device.startswith("cuda"):

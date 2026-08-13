@@ -3,11 +3,11 @@ custom_imports = dict(
     imports=["opentad.datasets.kp_transforms"], allow_failed_imports=False
 )
 # --- User-configurable paths ---
-annotation_path = "/media/ricardo/data/datasets/ATTACH/attach_debug_ann.json"
-class_map = "/media/ricardo/data/datasets/ATTACH/attach_category_idx.txt"
-video_data_path = "/media/ricardo/data/datasets/ATTACH/raw_attach_dataset/color/"
+annotation_path = "/datasets/ATTACH/141.24.24.111:50021/attach_person_split_ann.json"
+class_map = "/datasets/ATTACH/141.24.24.111:50021/attach_category_idx.txt"
+video_data_path = "/datasets/ATTACH/141.24.24.111:50021/raw_attach_dataset/color_resize/"
 skeleton_data_path_2d = (
-    "/media/ricardo/data/datasets/ATTACH/raw_attach_dataset/2d_azure_body_skeletons/"
+    "/datasets/ATTACH/141.24.24.111:50021/raw_attach_dataset/2d_azure_body_skeletons/"
 )
 block_list = None
 
@@ -134,6 +134,6 @@ dataset = dict(
 evaluation = dict(
     type="mAP",
     subset="test",
-    tiou_thresholds=[0.3, 0.4, 0.5, 0.6, 0.7],
+    tiou_thresholds=[0.1, 0.2, 0.3, 0.4, 0.5],
     ground_truth_filename=annotation_path,
 )

@@ -10,6 +10,7 @@ model = dict(
             keep_rate_merge=1,
             n_landmarks=32,
             adapter_use_attn=2,
+            return_feat_map=True,
         ),
         custom=dict(pretrain="pretrained/videomaev2_base_converted.pth"),
     ),
@@ -21,10 +22,17 @@ optimizer = dict(
         custom=[
             dict(name="adapter", lr=3e-05, weight_decay=0.01),
             dict(name="cls_token", lr=2e-05, weight_decay=0.01),
-            dict(name="heatmap_tokens", lr=3e-05, weight_decay=0.01),
-            dict(name="heatmap_head", lr=3e-05, weight_decay=0.01),
+            dict(name="heatmap_tokens", lr=1e-05, weight_decay=0.01),
+            dict(name="heatmap_head", lr=1e-05, weight_decay=0.01),
         ],
     )
+)
+
+solver = dict(
+    train=dict(
+        batch_size=16,
+        num_workers=16,
+    ),
 )
 
 work_dir = "exps/attach/vitsparse/e2e_actionformer_videomae_b_768x1_160_sparse_adapter"

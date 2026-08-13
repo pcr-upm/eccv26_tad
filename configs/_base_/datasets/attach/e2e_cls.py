@@ -1,11 +1,10 @@
-# config_attach_multimodal.py
-# custom_imports = dict(
-#     imports=["opentad.datasets.kp_transforms"], allow_failed_imports=False
-# )
 # --- User-configurable paths ---
-annotation_path = "/media/ricardo/data/datasets/ATTACH/attach_debug_ann.json"
-class_map = "/media/ricardo/data/datasets/ATTACH/attach_category_idx.txt"
-video_data_path = "/media/ricardo/data/datasets/ATTACH/raw_attach_dataset/color/"
+annotation_path = "/datasets/ATTACH/141.24.24.111:50021/attach_person_split_ann.json"
+class_map = "/datasets/ATTACH/141.24.24.111:50021/attach_category_idx.txt"
+video_data_path = "/datasets/ATTACH/141.24.24.111:50021/raw_attach_dataset/color_resize/"
+skeleton_data_path_2d = (
+    "/datasets/ATTACH/141.24.24.111:50021/raw_attach_dataset/2d_azure_body_skeletons/"
+)
 block_list = None
 
 # --- Model/Training hyperparameters ---
@@ -16,8 +15,6 @@ max_skeleton_len = 1024  # Corresponds to window_size * feature_stride
 # --- Dataset Configuration ---
 dataset = dict(
     train=dict(
-        # For simplicity, we'll use the sliding window for training too in this example.
-        # You would apply the same logic to AttachPaddingDataset if needed.
         type="AttachPaddingDataset",
         ann_file=annotation_path,
         subset_name="train",
@@ -36,19 +33,6 @@ dataset = dict(
             dict(type="mmaction.Resize", scale=(224, 224), keep_ratio=False),
             dict(type="mmaction.Flip", flip_ratio=0.5),
             dict(type="mmaction.FormatShape", input_format="NCTHW"),
-            # dict(
-            #     type="PadSkeletonSequence",
-            #     max_len=max_skeleton_len,
-            #     key="raw_keypoints",
-            #     out_key="keypoints",
-            # ),
-            # dict(
-            #     type="FormatSkeletonShape",
-            #     input_format="T_V_C",
-            #     target_format="C_T_V_M",
-            #     key="keypoints",
-            # ),
-            # Final steps to combine modalities
             dict(
                 type="ConvertToTensor",
                 keys=["imgs", "keypoints", "gt_segments", "gt_labels"],
@@ -128,6 +112,6 @@ dataset = dict(
 evaluation = dict(
     type="mAP",
     subset="test",
-    tiou_thresholds=[0.3, 0.4, 0.5, 0.6, 0.7],
+    tiou_thresholds=[0.1, 0.2, 0.3, 0.4, 0.5],
     ground_truth_filename=annotation_path,
 )

@@ -8,6 +8,7 @@ model = dict(
             num_heads=16,
             adapter_index=list(range(24)),
             keep_rate=0.6,
+            adapter_use_attn=1,
             adapter_conv_types=["2d_conv"] * 3 + ["sparse_conv"] * 21,
         ),
         custom=dict(pretrain="pretrained/videomaev2_large_converted.pth"),

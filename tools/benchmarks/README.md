@@ -27,6 +27,24 @@ python tools/benchmarks/benchmark_inference.py <config> \
 
 ---
 
+### `benchmark_train_memory.py` — Peak GPU memory during a training step
+
+Runs real training steps (forward + backward + `optimizer.step()`, matching `train_one_epoch`'s bf16 autocast and grad clipping) on one or more configs and reports peak allocated/reserved GPU memory. Skips loading the backbone's pretrained checkpoint by default (irrelevant to memory, and avoids requiring every checkpoint to be downloaded). Catches OOM per-config so a comparison can still complete if one model doesn't fit.
+
+```bash
+# ViTSparse vs AdaTAD, base model, THUMOS, per-GPU batch size 1
+python tools/benchmarks/benchmark_train_memory.py \
+    configs/vitsparse/thumos/e2e_thumos_videomae_b_768x1_160_sparse_adapter.py \
+    configs/adatad/thumos/e2e_thumos_videomae_b_768x1_160_adapter.py \
+    --batch-size 1
+```
+
+> Note: `solver.train.batch_size` in configs is the **global** DDP batch size (divided by `world_size`), not per-GPU. Use `--batch-size` to set the actual per-GPU batch fed to the model; without it, the config's value is used as-is on a single GPU, which can OOM for configs meant to run across multiple GPUs (e.g. vitsparse-b's `batch_size=4`).
+
+**Key flags:** `--batch-size`, `--amp {auto,on,off}`, `--ema`, `--load-pretrained`, `--warmup-iters`, `--benchmark-iters`, `--output-csv`
+
+---
+
 ### `benchmark_ncu.py` — NCU kernel profiler target
 
 Minimal script designed to be launched under NVIDIA Nsight Compute (`ncu`) to profile the sparse vs dense conv CUDA kernels with realistic blob-patterned sparse masks. Uses NVTX ranges for kernel-level attribution.

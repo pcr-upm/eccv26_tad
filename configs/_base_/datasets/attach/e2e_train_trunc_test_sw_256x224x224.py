@@ -1,24 +1,11 @@
 # --- User-configurable paths ---
-# Please update these paths to match your system's layout.
-
-# Path to the JSON annotation file created by the preprocessing script.
-# This example uses the 'person' split. If you created a 'camera' split, use that file instead.
-annotation_path = "/media/ricardo/data/datasets/ATTACH/attach_debug_ann.json"
+annotation_path = "/datasets/ATTACH/attach_debug_ann.json"
 
 # Path where the class map file (e.g., 'attach_category_idx.txt') will be saved.
 # The dataloader will generate this file automatically if it doesn't exist.
-class_map = "/media/ricardo/data/datasets/ATTACH/attach_category_idx.txt"
-
-# Path to the root of the raw ATTACH color video data.
-# The dataloader expects the video subfolders (e.g., '00__0__spike') to be inside this directory.
-data_path = "/media/ricardo/data/datasets/ATTACH/raw_attach_dataset/color/"
-
-# No block list is needed for ATTACH based on the documentation.
+class_map = "/datasets/ATTACH/attach_category_idx.txt"
+data_path = "/datasets/ATTACH/raw_attach_dataset/color/"
 block_list = None
-
-
-# This window size corresponds to 256 features. With a feature_stride of 4,
-# it covers 256 * 4 = 1024 frames (~34 seconds at 30fps). This is a reasonable baseline.
 window_size = 256
 
 
@@ -122,6 +109,6 @@ dataset = dict(
 evaluation = dict(
     type="mAP",
     subset="test",
-    tiou_thresholds=[0.3, 0.4, 0.5, 0.6, 0.7],
+    tiou_thresholds=[0.1, 0.2, 0.3, 0.4, 0.5],
     ground_truth_filename=annotation_path,
 )
