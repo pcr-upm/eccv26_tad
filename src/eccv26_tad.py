@@ -7,19 +7,26 @@ import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
 import numpy as np
+from mmengine.dataset import Compose
 from opentad.utils import set_seed
-from opentad.datasets.base import SlidingWindowDataset, ResizeDataset
+from opentad.datasets.builder import DATASETS
 from images_framework.src.recognition import Recognition
 set_seed(42)
 np.random.seed(42)
 
 
-class ExampleSlidingDataset(SlidingWindowDataset):
+class ExampleDataset:
     """
-    Single-video sliding window dataset. Inherits from base SlidingWindowDataset
+    Factory that builds a single-video dataset by reusing the real registered dataset class (e.g. ThumosSlidingDataset, AnetResizeDataset)
     """
-    def __init__(self, video_name, video_info, data_path, pipeline, class_map, cfg_test):
-        # Set attributes required by SlidingWindowDataset base class
+    def __new__(cls, video_name, video_info, data_path, pipeline, class_map, cfg_test):
+        dataset_type = cfg_test.get('type', 'ThumosSlidingDataset')
+        real_cls = DATASETS.get(dataset_type)
+        if real_cls is None:
+            raise ValueError(f"Unknown dataset type: {dataset_type}")
+        # Create the real instance without running its __init__
+        self = real_cls.__new__(real_cls)
+        # Basic settings expected by the base classes / __getitem__
         self.data_path = data_path
         self.class_map = class_map
         self.block_list = None
@@ -29,62 +36,34 @@ class ExampleSlidingDataset(SlidingWindowDataset):
         self.class_agnostic = False
         self.filter_gt = False
         self.test_mode = True
-        self.pipeline = pipeline
+        self.pipeline = Compose(pipeline)
         self.debug = False
-        self._aligned_cache = {}
-        self._file_exists_cache = {}
-        # Read parameters from config (works for any sliding dataset type)
+        self.fps = -1
+        self.video_split_ratio = None
+        # Feature settings
         self.feature_stride = int(getattr(cfg_test, 'feature_stride', 4))
         self.sample_stride = int(getattr(cfg_test, 'sample_stride', 1))
         self.offset_frames = int(getattr(cfg_test, 'offset_frames', 0))
         self.snippet_stride = int(self.feature_stride * self.sample_stride)
-        self.fps = -1
+        # Sliding window settings
         self.window_size = int(getattr(cfg_test, 'window_size', 768))
         self.window_stride = int(self.window_size * (1 - getattr(cfg_test, 'window_overlap_ratio', 0.5)))
         self.ioa_thresh = getattr(cfg_test, 'ioa_thresh', 0.75)
-        # Create data list by splitting video into windows
-        self.data_list = self.split_video_to_windows(video_name, video_info, {})
-
-
-class ExampleResizeDataset(ResizeDataset):
-    """
-    Single-video resize dataset. Inherits from base ResizeDataset
-    """
-    def __init__(self, video_name, video_info, data_path, pipeline, class_map, cfg_test):
-        # Set attributes required by ResizeDataset base class
-        self.data_path = data_path
-        self.class_map = class_map
-        self.block_list = None
-        self.ann_file = None
-        self.subset_name = None
-        self.logger = print
-        self.class_agnostic = False
-        self.filter_gt = False
-        self.test_mode = True
-        self.pipeline = pipeline
-        self.debug = False
-        # Read parameters from config
-        self.sample_stride = int(getattr(cfg_test, 'sample_stride', 1))
-        self.offset_frames = int(getattr(cfg_test, 'offset_frames', 0))
-        self.snippet_stride = int(getattr(cfg_test, 'snippet_stride', 4))
-        self.fps = -1
+        # Resize settings
         self.resize_length = getattr(cfg_test, 'resize_length', 224)
-        # Single entry for resize dataset
-        self.data_list = [(video_name, video_info)]
-
-
-class ExampleDataset:
-    """
-    Factory that returns appropriate single-video dataset based on config type
-    """
-    def __new__(cls, video_name, video_info, data_path, pipeline, class_map, cfg_test):
-        # Detect dataset type and instantiate appropriate class
-        dataset_type = cfg_test.get('type', 'ThumosSlidingDataset')
+        # Skeleton / keypoint settings (used by some __getitem__ implementations)
+        self.skeleton_data_path_2d = getattr(cfg_test, 'skeleton_data_path_2d', None)
+        self.preprocessed_skeleton_path = getattr(cfg_test, 'preprocessed_skeleton_path', None)
+        self.skeleton_cache = {}
+        self._aligned_cache = {}
+        self._file_exists_cache = {}
+        # Build the single-video data_list in the shape the class' __getitem__ expects
         is_sliding = 'Sliding' in dataset_type or 'Padding' in dataset_type
         if is_sliding:
-            return ExampleSlidingDataset(video_name, video_info, data_path, pipeline, class_map, cfg_test)
+            self.data_list = self.split_video_to_windows(video_name, video_info, {})
         else:
-            return ExampleResizeDataset(video_name, video_info, data_path, pipeline, class_map, cfg_test)
+            self.data_list = [(video_name, video_info, {})]
+        return self
 
 
 class ECCV26TAD(Recognition):
