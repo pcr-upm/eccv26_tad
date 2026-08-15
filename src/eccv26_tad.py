@@ -7,45 +7,36 @@ import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
 import numpy as np
-from mmengine.dataset import Compose
+import copy
 from opentad.utils import set_seed
-from opentad.datasets import ThumosSlidingDataset
+from opentad.datasets import build_dataset
 from images_framework.src.recognition import Recognition
 set_seed(42)
 np.random.seed(42)
 
 
-class ExampleSlidingDataset(ThumosSlidingDataset):
+class ExampleDataset:
     """
-    Single-video sliding-window dataset, reuses real test pipeline
+    Single-video dataset wrapper that works with different TAD datasets (THUMOS, ActivityNet, etc).
     """
-    def __init__(self, video_name, video_info, data_path, pipeline, class_map, window_size, feature_stride=4, sample_stride=1, window_overlap_ratio=0.5):
-        self.data_path = data_path
-        self.block_list = None
-        self.ann_file = None
-        self.subset_name = None
-        self.logger = print
-        self.class_map = class_map
-        self.class_agnostic = False
-        self.filter_gt = False
-        self.test_mode = True
-        self.pipeline = Compose(pipeline)
-        self.feature_stride = int(feature_stride)
-        self.sample_stride = int(sample_stride)
-        self.offset_frames = 0
-        self.snippet_stride = int(feature_stride * sample_stride)
-        self.fps = -1
-        self.window_size = int(window_size)
-        self.window_stride = int(window_size * (1 - window_overlap_ratio))
-        self.ioa_thresh = 0.75
-        self.video_split_ratio = None
-        self.skeleton_data_path_2d = None
-        self.preprocessed_skeleton_path = None
-        self.skeleton_cache = {}
-        self.debug = False
-        self._aligned_cache = {}
-        self._file_exists_cache = {}
-        self.data_list = self.split_video_to_windows(video_name, video_info, {})
+    def __init__(self, video_name, video_info, data_path, pipeline, class_map, cfg_test):
+        # Create a minimal config with only the single video for build_dataset
+        cfg_copy = copy.deepcopy(cfg_test)
+        cfg_copy.data_path = data_path
+        cfg_copy.pipeline = pipeline
+        cfg_copy.class_map = class_map
+        cfg_copy.ann_file = None
+        cfg_copy.block_list = None
+        # Single entry regardless of dataset type; build_dataset will handle appropriately
+        cfg_copy.data_list = [(video_name, video_info)]
+        # Use build_dataset factory which returns the correct dataset type
+        self.wrapped_dataset = build_dataset(cfg_copy)
+
+    def __len__(self):
+        return len(self.wrapped_dataset)
+
+    def __getitem__(self, idx):
+        return self.wrapped_dataset[idx]
 
 
 class ECCV26TAD(Recognition):
@@ -189,7 +180,7 @@ class ECCV26TAD(Recognition):
         video_info["frame"] = frame
         video_info["duration"] = duration
         class_map = self.class_map
-        test_dataset = ExampleSlidingDataset(video_name=video_name, video_info=video_info, data_path=data_path, pipeline=test_cfg.pipeline, class_map=class_map, window_size=getattr(test_cfg, "window_size", 768), feature_stride=getattr(test_cfg, "feature_stride", 4), sample_stride=getattr(test_cfg, "sample_stride", 1), window_overlap_ratio=getattr(test_cfg, "window_overlap_ratio", 0.5))
+        test_dataset = ExampleDataset(video_name=video_name, video_info=video_info, data_path=data_path, pipeline=test_cfg.pipeline, class_map=class_map, cfg_test=test_cfg)
         # Build dataloader with custom collate that moves to device
         sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=self.world_size, rank=self.rank, shuffle=False, drop_last=False)
         test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=self.cfg.solver.test.get("batch_size", 1) // self.world_size, collate_fn=collate_with_device, sampler=sampler, num_workers=0, pin_memory=False)
