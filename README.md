@@ -12,27 +12,14 @@ Proc. European Conference on Computer Vision, ECCV 2026.
 **CUDA 11.8** and **cuDNN 9** support — CUDA 11.8 is a requirement of the underlying [OpenTAD](https://github.com/sming256/OpenTAD) library itself.
 `start.sh` installs Python dependencies, builds [decord](https://github.com/dmlc/decord) with CUDA, and compiles the custom CUDA sparse-conv extension (`opentad_sparse_ops`).
 
-- torch==2.0.1 
-- torchvision==0.15.2
-- deepspeed
-- openmim 
-- mmcv==2.0.1 
-- mmaction2==1.1.0 
-- flash-attn==2.5.4
-- images-framework 
-- torchinfo 
-- timm==1.0.24
-- mmengine
-- wandb
-- scipy
-- einops
-- pandas
-- tqdm
-- ninja
-- imgaug
-- pytorchvideo
-- numpy==1.23.5
-- gdown==5.1.0
+| | | | |
+|---|---|---|---|
+| `torch==2.0.1` | `torchvision==0.15.2` | `deepspeed` | `openmim` |
+| `mmcv==2.0.1` | `mmaction2==1.1.0` | `flash-attn==2.5.4` | `images-framework` |
+| `torchinfo` | `timm==1.0.24` | `mmengine` | `wandb` |
+| `scipy` | `einops` | `pandas` | `tqdm` |
+| `ninja` | `imgaug` | `pytorchvideo` | `numpy==1.23.5` |
+| `gdown==5.1.0` | | | |
 
 #### Usage
 ```
@@ -61,7 +48,7 @@ usage: ECCV26TAD [--gpu GPU] [--config FILE] [--ckpt CKPT]
 
 * Use the --ckpt option to set the checkpoint path.
 ```
-> torchrun --nnodes=1 --nproc_per_node=1 test/eccv26_tad_test.py --input-data test/example.mp4 --config configs/vitsparse/thumos/e2e_thumos_videomae_b_768x1_160_sparse_adapter.py --ckpt data/vitb_thumos_best.pth --topk 10 --database thumos --gpu 0 --save-video
+> torchrun --nnodes=1 --nproc_per_node=1 test/eccv26_tad_test.py --input-data test/example.mp4 --config configs/vitsparse/thumos/e2e_thumos_videomae_b_768x1_160_sparse_adapter.py --ckpt data/thumos_vitb.pth --topk 10 --database thumos --gpu 0 --save-video
 ```
 
 #### SparseConv2D CUDA Library

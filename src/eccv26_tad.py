@@ -196,12 +196,16 @@ class ECCV26TAD(Recognition):
 
         # AMP: automatic mixed precision
         use_amp = getattr(self.cfg.solver, "amp", False)
+
+        # eval_one_epoch combines all GPU results with gather_ddp_results() and saves to a single JSON
         eval_one_epoch(test_loader, self.model, self.cfg, print, self.rank, model_ema=None, use_amp=use_amp, world_size=self.world_size, not_eval=True)
 
-        # Save prediction
-        with open(os.path.join(self.cfg.work_dir, 'result_detection.json'), 'r') as ifs:
-            data = json.load(ifs)
-        for video_name, actions in data['results'].items():
-            for action in actions:
-                label = self.classes[class_map.index(action["label"])]
-                pred.add_action(TemporalCategory(label=label, segment=tuple(action["segment"]), score=action["score"]))
+        # Only rank 0 reads the combined result_detection.json (which contains all predictions from all GPUs)
+        if self.rank == 0:
+            result_file = os.path.join(self.cfg.work_dir, 'result_detection.json')
+            with open(result_file, 'r') as ifs:
+                data = json.load(ifs)
+            for video_name, actions in data['results'].items():
+                for action in actions:
+                    label = self.classes[class_map.index(action["label"])]
+                    pred.add_action(TemporalCategory(label=label, segment=tuple(action["segment"]), score=action["score"]))
