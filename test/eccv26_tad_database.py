@@ -99,14 +99,14 @@ def main():
     anns = load_annotations(sr.cfg.dataset.test, load_images=save_video)
 
     # Process database
-    label_names = {name: sr.class_map[idx] for idx, name in sr.classes.items()}
+    label_names = {enum_obj: sr.class_map[idx] for idx, enum_obj in sr.classes.items()}
     result_dict = {'results': {}}
     for i in tqdm(range(len(anns)), file=sys.stdout):
         pred = copy.deepcopy(anns[i])
         pred.categories.clear()
         pred.actions.clear()
         sr.process(anns[i], pred)
-        video_name = os.path.splitext(os.path.basename(pred.filename))[0]
+        video_name = sr.get_video_id(pred.filename)
         result_dict['results'].setdefault(video_name, [])
         for action in pred.actions:
             result_dict["results"][video_name].append({'segment': list(action.segment), 'label': label_names[action.label], 'score': float(action.score)})

@@ -172,6 +172,14 @@ class ECCV26TAD(Recognition):
                 print("Using Model EMA...")
             self.model.eval()
 
+    def get_video_id(self, filename):
+        video_name = os.path.splitext(os.path.basename(filename))[0]
+        prepare_video_info_cfg = next((p for p in self.cfg.dataset.test.pipeline if p.get('type') == 'PrepareVideoInfo'), {})
+        video_prefix = prepare_video_info_cfg.get('prefix', '')
+        if video_prefix and video_name.startswith(video_prefix):
+            video_name = video_name[len(video_prefix):]
+        return video_name
+
     def process(self, ann, pred):
         import cv2
         import json
@@ -200,7 +208,7 @@ class ECCV26TAD(Recognition):
 
         # Build dataset with only the video from pred.filename
         test_cfg = self.cfg.dataset.test
-        video_name = os.path.splitext(os.path.basename(pred.filename))[0]
+        video_name = self.get_video_id(pred.filename)
         data_path = os.path.dirname(os.path.abspath(pred.filename))
         video_info = {}
         frame, duration = _probe_video_frame_duration(pred.filename)
