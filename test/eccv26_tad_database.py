@@ -26,6 +26,7 @@ def parse_options():
     Parse options from command line.
     """
     import argparse
+    from mmengine.config import DictAction
     parser = argparse.ArgumentParser()
     parser.add_argument("--ann-file", type=str, default=None,
                         help="override the annotation file path for all dataset splits and evaluation.")
@@ -37,6 +38,8 @@ def parse_options():
                         help="override the block list file path for all dataset splits.")
     parser.add_argument("--external-cls-path", type=str, default=None,
                         help="override the external classifier (post_processing.external_cls) path.")
+    parser.add_argument("--cfg-options", nargs="+", action=DictAction, default=None,
+                        help="override settings in the config (e.g., --cfg-options model.backbone.backbone.n_landmarks=32)")
     parser.add_argument('--save-video', '-v', dest='save_video', action="store_true",
                         help='Save processed video.')
     args, unknown = parser.parse_known_args()
@@ -46,8 +49,9 @@ def parse_options():
     data_root = args.data_root
     block_list = args.block_list
     external_cls_path = args.external_cls_path
+    cfg_options = args.cfg_options or {}
     save_video = args.save_video
-    return unknown, ann_file, class_map, data_root, block_list, external_cls_path, save_video
+    return unknown, ann_file, class_map, data_root, block_list, external_cls_path, cfg_options, save_video
 
 
 def load_annotations(config, load_images=True):
@@ -55,7 +59,7 @@ def load_annotations(config, load_images=True):
     Load ground truth annotations from test dataset.
     """
     test_dataset = build_dataset(config)
-    db = 'thumos' if config.type.startswith('Thumos') else 'anet' if config.type.startswith('Anet') else None
+    db = 'thumos' if config.type.startswith('Thumos') else 'anet' if config.type.startswith('Anet') else 'attach' if config.type.startswith('Attach') else None
     datasets = [subclass().get_names() for subclass in Database.__subclasses__()]
     idx = [datasets.index(subset) for subset in datasets if db in subset]
     if len(idx) != 1:
@@ -77,7 +81,7 @@ def main():
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test database script.
     """
     print('OpenCV ' + cv2.__version__)
-    unknown, ann_file, class_map, data_root, block_list, external_cls_path, save_video = parse_options()
+    unknown, ann_file, class_map, data_root, block_list, external_cls_path, cfg_options, save_video = parse_options()
 
     # Load vision components
     composite = Composite()
@@ -85,6 +89,9 @@ def main():
     composite.add(sr)
     sr.parse_options(unknown)
     sr.load(Modes.TEST)
+    # Apply config overrides from --cfg-options before path overrides
+    if cfg_options:
+        sr.cfg.merge_from_dict(cfg_options)
     sr.cfg = override_dataset_paths(sr.cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
     sr.cfg.work_dir = sr.path
     sr.cfg.post_processing.save_dict = True
