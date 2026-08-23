@@ -1,16 +1,11 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
-__author__ = 'Ricardo Pizarro'
-__email__ = 'ricardo.pizarroc@edu.uah.es'
+__author__ = 'Roberto Valle'
+__email__ = 'roberto.valle@upm.es'
 
 import os
 import sys
-
-sys.dont_write_bytecode = True
-path = os.path.join(os.path.dirname(__file__), "..")
-if path not in sys.path:
-    sys.path.insert(0, path)
-
+sys.path.append(os.getcwd())
 import argparse
 import torch
 import torch.distributed as dist
@@ -20,24 +15,8 @@ from torch.nn.parallel import DistributedDataParallel
 from mmengine.config import Config, DictAction
 from opentad.models import build_detector
 from opentad.datasets import build_dataset, build_dataloader
-from opentad.cores import (
-    train_one_epoch,
-    val_one_epoch,
-    eval_one_epoch,
-    build_optimizer,
-    build_scheduler,
-)
-from opentad.utils import (
-    set_seed,
-    update_workdir,
-    override_dataset_paths,
-    create_folder,
-    save_config,
-    setup_logger,
-    ModelEma,
-    save_checkpoint,
-    save_best_checkpoint,
-)
+from opentad.cores import train_one_epoch, val_one_epoch, eval_one_epoch, build_optimizer, build_scheduler
+from opentad.utils import set_seed, update_workdir, override_dataset_paths,create_folder, save_config, setup_logger, ModelEma, save_checkpoint, save_best_checkpoint
 import random
 import string
 
@@ -122,7 +101,7 @@ def main():
     dist.init_process_group("nccl", rank=args.rank, world_size=args.world_size)
 
     # set random seed, create work_dir, and save config
-    set_seed(args.seed, True)
+    set_seed(args.seed, args.disable_deterministic)
     cfg = update_workdir(cfg, args.id, args.world_size)
     if args.rank == 0:
         create_folder(cfg.work_dir)
@@ -139,12 +118,6 @@ def main():
     if args.wandb and args.rank == 0:
         run_name = os.path.basename(args.config).split(".")[0] + f"_id{args.id}"
         wandb.init(project=args.project, name=run_name, config=cfg.to_dict())
-        # Track the PEAK mAP in the run summary, not the last logged value. The
-        # end-of-training eval can be lower (or 0 if training diverged late), and
-        # a bayes sweep optimizes the summary value -- without this it would treat
-        # a run that peaked high but ended low as a poor config.
-        for _m in ["average_mAP", "mAP@0.3", "mAP@0.4", "mAP@0.5", "mAP@0.6", "mAP@0.7"]:
-            wandb.define_metric(_m, summary="max")
 
     # build dataset
     train_dataset = build_dataset(cfg.dataset.train, default_args=dict(logger=logger))
@@ -294,6 +267,8 @@ def main():
                 )
 
         # val for one epoch and early stopping check
+        # None = no val loss computed this epoch, so eval falls back to its interval
+        val_loss_improved = None
         if epoch >= val_start_epoch:
             if (cfg.workflow.val_loss_interval > 0) and (
                 (epoch + 1) % cfg.workflow.val_loss_interval == 0
@@ -318,6 +293,7 @@ def main():
                         )
                         val_loss_best = val_loss  # Update the best loss
                         epochs_no_improve = 0  # Reset counter
+                        val_loss_improved = True
                         if args.rank == 0:
                             # Save the best model only when significant improvement is observed
                             save_best_checkpoint(
@@ -326,6 +302,7 @@ def main():
                     else:
                         # No significant improvement, increment counter
                         epochs_no_improve += 1
+                        val_loss_improved = False
                         logger.info(
                             f"Validation loss did not improve significantly. Early stopping counter: {epochs_no_improve}/{early_stopping_patience}."
                         )
@@ -343,13 +320,17 @@ def main():
                             f"New best epoch {epoch} based on val_loss: {val_loss:.4f}."
                         )
                         val_loss_best = val_loss
+                        val_loss_improved = True
                         if args.rank == 0:
                             save_best_checkpoint(
                                 model, model_ema, epoch, work_dir=cfg.work_dir
                             )
+                    else:
+                        val_loss_improved = False
 
         # eval for one epoch (evaluation metrics, not for early stopping loss)
-        if epoch >= val_start_epoch:
+        # skipped when the val loss did not improve this epoch
+        if epoch >= val_start_epoch and val_loss_improved is not False:
             if (cfg.workflow.val_eval_interval > 0) and (
                 (epoch + 1) % cfg.workflow.val_eval_interval == 0
             ):
@@ -365,6 +346,8 @@ def main():
                     not_eval=args.not_eval,
                     training=True,
                 )
+        elif val_loss_improved is False and (cfg.workflow.val_eval_interval > 0) and ((epoch + 1) % cfg.workflow.val_eval_interval == 0):
+            logger.info(f"Skipping evaluation at epoch {epoch}: val_loss did not improve.")
     logger.info("Training Over...\n")
 
     # Load best model if exists
