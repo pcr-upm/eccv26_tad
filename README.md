@@ -23,7 +23,7 @@ Proc. European Conference on Computer Vision, ECCV 2026.
 
 #### Usage
 ```
-usage: eccv26_tad_test.py [-h] [--input-data INPUT_DATA] [--thresh THRESH] [--topk TOPK] [--data-root DATA_ROOT] [--save-video]
+usage: eccv26_tad_test.py [-h] [--input-data INPUT_DATA] [--thresh THRESH] [--topk TOPK] [--data-root DATA_ROOT] [--external-cls-path EXTERNAL_CLS_PATH] [--cfg-options CFG_OPTIONS] [--save-video]
 ```
 
 * Use the --input-data option to set an image, directory, camera or video file as input.
@@ -33,6 +33,10 @@ usage: eccv26_tad_test.py [-h] [--input-data INPUT_DATA] [--thresh THRESH] [--to
 * Use the --topk option to show at most this many predictions (sorted by score).
 
 * Use the --data-root option to override the raw video / feature data root path.
+
+* Use the --external-cls-path option to override the external classifier (post_processing.external_cls) path.
+
+* Use the --cfg-options option to override settings in the config (e.g., --cfg-options model.backbone.backbone.n_landmarks=32).
 
 * Use the --save-video option to save the processed video.
 ```

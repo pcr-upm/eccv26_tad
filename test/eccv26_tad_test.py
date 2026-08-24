@@ -26,6 +26,7 @@ def parse_options():
     Parse options from command line.
     """
     import argparse
+    from mmengine.config import DictAction
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-data', '-d', dest='input_data', required=True, default='',
                         help='Input as image video file.')
@@ -35,6 +36,10 @@ def parse_options():
                         help='Show at most this many predictions (sorted by score).')
     parser.add_argument('--data-root', type=str, default=None,
                         help='override the raw video / feature data root path.')
+    parser.add_argument('--external-cls-path', type=str, default=None,
+                        help='override the external classifier (post_processing.external_cls) path.')
+    parser.add_argument('--cfg-options', nargs="+", action=DictAction, default=None,
+                        help='override settings in the config (e.g., --cfg-options model.backbone.backbone.n_landmarks=32)')
     parser.add_argument('--save-video', '-v', dest='save_video', action="store_true",
                         help='Save processed video.')
     args, unknown = parser.parse_known_args()
@@ -43,8 +48,10 @@ def parse_options():
     thresh = args.thresh
     topk = args.topk
     data_root = args.data_root
+    external_cls_path = args.external_cls_path
+    cfg_options = args.cfg_options or {}
     save_video = args.save_video
-    return unknown, input_data, thresh, topk, data_root, save_video
+    return unknown, input_data, thresh, topk, data_root, external_cls_path, cfg_options, save_video
 
 
 def load_annotations(filename):
@@ -67,7 +74,7 @@ def main():
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test video script.
     """
     print('OpenCV ' + cv2.__version__)
-    unknown, input_data, thresh, topk, data_root, save_video = parse_options()
+    unknown, input_data, thresh, topk, data_root, external_cls_path, cfg_options, save_video = parse_options()
 
     # Load vision components
     composite = Composite()
@@ -75,8 +82,10 @@ def main():
     composite.add(sr)
     composite.parse_options(unknown)
     composite.load(Modes.TEST)
-    if data_root:
-        sr.cfg = override_dataset_paths(sr.cfg, data_path=data_root)
+    if data_root or external_cls_path:
+        sr.cfg = override_dataset_paths(sr.cfg, data_path=data_root, external_cls_path=external_cls_path)
+    if cfg_options:
+        sr.cfg.merge_from_dict(cfg_options)
     if save_video:
         viewer = Viewer('eccv26_tad_test')
         spec = importlib.util.find_spec('images_framework')

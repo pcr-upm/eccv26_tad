@@ -87,12 +87,12 @@ def main():
     composite = Composite()
     sr = ECCV26TAD('')
     composite.add(sr)
-    sr.parse_options(unknown)
-    sr.load(Modes.TEST)
-    # Apply config overrides from --cfg-options before path overrides
+    composite.parse_options(unknown)
+    composite.load(Modes.TEST)
+    if ann_file or class_map or data_root or block_list or external_cls_path:
+        sr.cfg = override_dataset_paths(sr.cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
     if cfg_options:
         sr.cfg.merge_from_dict(cfg_options)
-    sr.cfg = override_dataset_paths(sr.cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
     sr.cfg.work_dir = sr.path
     sr.cfg.post_processing.save_dict = True
     if save_video:

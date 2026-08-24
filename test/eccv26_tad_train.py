@@ -151,6 +151,7 @@ def main():
     )
 
     # build model
+    cfg.model['backbone']['custom']['pretrain'] = 'data/' + cfg.model['backbone']['custom']['pretrain']
     model = build_detector(cfg.model)
 
     # DDP
