@@ -23,7 +23,7 @@ Proc. European Conference on Computer Vision, ECCV 2026.
 
 #### Usage
 ```
-usage: eccv26_tad_test.py [-h] [--input-data INPUT_DATA] [--thresh THRESH] [--topk TOPK] [--save-video]
+usage: eccv26_tad_test.py [-h] [--input-data INPUT_DATA] [--thresh THRESH] [--topk TOPK] [--data-root DATA_ROOT] [--save-video]
 ```
 
 * Use the --input-data option to set an image, directory, camera or video file as input.
@@ -31,6 +31,8 @@ usage: eccv26_tad_test.py [-h] [--input-data INPUT_DATA] [--thresh THRESH] [--to
 * Use the --thresh option to only show predictions with score above this threshold.
 
 * Use the --topk option to show at most this many predictions (sorted by score).
+
+* Use the --data-root option to override the raw video / feature data root path.
 
 * Use the --save-video option to save the processed video.
 ```
@@ -48,7 +50,7 @@ usage: ECCV26TAD [--gpu GPU] [--config FILE] [--ckpt CKPT]
 
 * Use the --ckpt option to set the checkpoint path.
 ```
-> torchrun --nnodes=1 --nproc_per_node=1 test/eccv26_tad_test.py --input-data test/example.mp4 --config configs/vitsparse/thumos/e2e_thumos_videomae_b_768x1_160_sparse_adapter.py --ckpt data/thumos_vitb.pth --topk 10 --database thumos --gpu 0 --save-video
+> torchrun --nnodes=1 --nproc_per_node=1 test/eccv26_tad_test.py --input-data test/example.mp4 --config configs/vitsparse/thumos/e2e_thumos_videomae_b_768x1_160_sparse_adapter.py --ckpt data/thumos_vitb.pth --topk 10 --database thumos --gpu 0 --data-root test/ --save-video
 ```
 
 #### SparseConv2D CUDA Library

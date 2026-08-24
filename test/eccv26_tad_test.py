@@ -12,6 +12,7 @@ import tempfile
 import numpy as np
 import importlib.util
 from pathlib import Path
+from opentad.utils import override_dataset_paths
 from images_framework.src.constants import Modes
 from images_framework.src.datasets import Database
 from images_framework.src.composite import Composite
@@ -32,6 +33,8 @@ def parse_options():
                         help='Only show predictions with score above this threshold.')
     parser.add_argument('--topk', type=int, default=20,
                         help='Show at most this many predictions (sorted by score).')
+    parser.add_argument('--data-root', type=str, default=None,
+                        help='override the raw video / feature data root path.')
     parser.add_argument('--save-video', '-v', dest='save_video', action="store_true",
                         help='Save processed video.')
     args, unknown = parser.parse_known_args()
@@ -39,8 +42,9 @@ def parse_options():
     input_data = args.input_data
     thresh = args.thresh
     topk = args.topk
+    data_root = args.data_root
     save_video = args.save_video
-    return unknown, input_data, thresh, topk, save_video
+    return unknown, input_data, thresh, topk, data_root, save_video
 
 
 def load_annotations(filename):
@@ -63,7 +67,7 @@ def main():
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test video script.
     """
     print('OpenCV ' + cv2.__version__)
-    unknown, input_data, thresh, topk, save_video = parse_options()
+    unknown, input_data, thresh, topk, data_root, save_video = parse_options()
 
     # Load vision components
     composite = Composite()
@@ -71,6 +75,8 @@ def main():
     composite.add(sr)
     composite.parse_options(unknown)
     composite.load(Modes.TEST)
+    if data_root:
+        sr.cfg = override_dataset_paths(sr.cfg, data_path=data_root)
     if save_video:
         viewer = Viewer('eccv26_tad_test')
         spec = importlib.util.find_spec('images_framework')
