@@ -1,5 +1,11 @@
 # SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection
 
+SV-TAD is an adapter framework for end-to-end temporal action detection (TAD) that, for the first time, lets convolutional adapters operate directly on dynamically pruned token sequences — without reconstructing the dense spatial grid.
+
+**The problem.** Adapter-based fine-tuning freezes a large ViT backbone and trains lightweight convolutional modules, but those modules still process every token. Token selection reduces attention cost, but removes the spatial grid structure that convolutions need, forcing expensive scatter-gather reconstruction that cancels the savings.
+
+**Our solution.** We introduce **SparseConv2D**, a native sparse 2D convolution that replaces the spatial grid with a precomputed *neighbor index table* over the sparse token set. Both forward and backward passes are implemented as custom CUDA kernels whose compute and memory scale linearly with the number of retained tokens.
+
 If you use this code for your own research, you must reference our conference paper:
 
 ```
