@@ -12,5 +12,5 @@ echo 'Transferring data from docker container to your local machine ...'
 mkdir -p output
 sudo chown -R "${USER}":"${USER}" /var/lib/docker/
 rsync --delete -azvv /var/lib/docker/volumes/eccv26_tad_volume/_data/conda/envs/eccv26/lib/python3.10/site-packages/images_framework/output/images/ output
-sudo docker system prune --all --force --volumes
-sudo docker volume rm $(sudo docker volume ls -qf dangling=true)
+sudo docker volume rm eccv26_tad_volume
+sudo docker image rm eccv26_tad_image

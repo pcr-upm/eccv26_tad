@@ -8,17 +8,18 @@ import sys
 sys.path.append(os.getcwd())
 import cv2
 import torch
-import torch.distributed as dist
 import wandb
 import random
 import string
 from torch.distributed.algorithms.ddp_comm_hooks import default as comm_hooks
 from torch.nn.parallel import DistributedDataParallel
-from mmengine.config import Config
 from opentad.models import build_detector
 from opentad.datasets import build_dataset, build_dataloader
 from opentad.cores import train_one_epoch, val_one_epoch, eval_one_epoch, build_optimizer, build_scheduler
 from opentad.utils import update_workdir, override_dataset_paths,create_folder, save_config, setup_logger, ModelEma, save_checkpoint, save_best_checkpoint
+from images_framework.src.constants import Modes
+from images_framework.src.composite import Composite
+from src.eccv26_tad import ECCV26TAD
 
 
 def parse_options():
@@ -28,9 +29,6 @@ def parse_options():
     import argparse
     from mmengine.config import DictAction
     parser = argparse.ArgumentParser()
-    parser.add_argument("config", metavar="FILE", type=str, help="path to config file")
-    parser.add_argument("--id", type=int, default=0, 
-                        help="repeat experiment id.")
     parser.add_argument("--resume", type=str, default=None, 
                         help="resume from a checkpoint.")
     parser.add_argument("--wandb", action="store_true", 
@@ -51,8 +49,6 @@ def parse_options():
                         help="override settings in the config (e.g., --cfg-options model.backbone.backbone.n_landmarks=32)")
     args, unknown = parser.parse_known_args()
     print(parser.format_usage())
-    config = args.config
-    id = args.id
     resume = args.resume
     use_wandb = args.wandb
     project = args.project
@@ -62,7 +58,7 @@ def parse_options():
     block_list = args.block_list
     external_cls_path = args.external_cls_path
     cfg_options = args.cfg_options or {}
-    return unknown, config, id, resume, use_wandb, project, ann_file, class_map, data_root, block_list, external_cls_path, cfg_options
+    return unknown, resume, use_wandb, project, ann_file, class_map, data_root, block_list, external_cls_path, cfg_options
 
 
 def main():
@@ -70,69 +66,67 @@ def main():
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection train database script.
     """
     print('OpenCV ' + cv2.__version__)
-    unknown, config, id, resume, use_wandb, project, ann_file, class_map, data_root, block_list, external_cls_path, cfg_options = parse_options()
+    unknown, resume, use_wandb, project, ann_file, class_map, data_root, block_list, external_cls_path, cfg_options = parse_options()
 
-    # load config
-    cfg = Config.fromfile(config)
-    # generate random three letter run id
+    # Load vision components
+    composite = Composite()
+    sr = ECCV26TAD('')
+    composite.add(sr)
+    composite.parse_options(unknown)
+    # composite.load(Modes.TRAIN)
+    if ann_file or class_map or data_root or block_list or external_cls_path:
+        sr.cfg = override_dataset_paths(sr.cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
+    if cfg_options:
+        sr.cfg.merge_from_dict(cfg_options)
+    sr.cfg.work_dir = sr.path
+    # Generate random three letter run id
     run_id = "".join([random.choice(string.ascii_lowercase) for _ in range(3)])
-    cfg.work_dir = os.path.join(cfg.work_dir, run_id)
+    sr.cfg.work_dir = os.path.join(sr.cfg.work_dir, run_id)
     id = run_id
-    if cfg_options is not None:
-        cfg.merge_from_dict(cfg_options)
-    cfg = override_dataset_paths(cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
 
-    # DDP init
-    local_rank = int(os.environ["LOCAL_RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-    rank = int(os.environ["RANK"])
-    print(f"Distributed init (rank {rank}/{world_size}, local rank {local_rank})")
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-
-    cfg = update_workdir(cfg, id, world_size)
-    if rank == 0:
-        create_folder(cfg.work_dir)
-        save_config(config, cfg.work_dir)
+    sr.cfg = update_workdir(sr.cfg, id, sr.world_size)
+    if sr.rank == 0:
+        create_folder(sr.cfg.work_dir)
+        save_config(sr.cfg, sr.cfg.work_dir)
 
     # setup logger
-    logger = setup_logger("Train", save_dir=cfg.work_dir, distributed_rank=rank)
+    logger = setup_logger("Train", save_dir=sr.cfg.work_dir, distributed_rank=sr.rank)
     logger.info(f"Using torch version: {torch.__version__}, CUDA version: {torch.version.cuda}")
-    logger.info(f"Config: \n{cfg.pretty_text}")
+    logger.info(f"Config: \n{sr.cfg.pretty_text}")
 
     # setup wandb
-    if use_wandb and rank == 0:
-        run_name = os.path.basename(config).split(".")[0] + f"_id{id}"
-        wandb.init(project=project, name=run_name, config=cfg.to_dict())
+    if use_wandb and sr.rank == 0:
+        run_name = os.path.basename(sr.cfg).split(".")[0] + f"_id{id}"
+        wandb.init(project=project, name=run_name, config=sr.cfg.to_dict())
 
     # build dataset
-    train_dataset = build_dataset(cfg.dataset.train, default_args=dict(logger=logger))
-    train_loader = build_dataloader(train_dataset, rank=rank, world_size=world_size, shuffle=True, drop_last=True, **cfg.solver.train)
+    train_dataset = build_dataset(sr.cfg.dataset.train, default_args=dict(logger=logger))
+    train_loader = build_dataloader(train_dataset, rank=sr.rank, world_size=sr.world_size, shuffle=True, drop_last=True, **sr.cfg.solver.train)
 
-    val_dataset = build_dataset(cfg.dataset.val, default_args=dict(logger=logger))
-    val_loader = build_dataloader(val_dataset, rank=rank, world_size=world_size, shuffle=False, drop_last=False, **cfg.solver.val)
+    val_dataset = build_dataset(sr.cfg.dataset.val, default_args=dict(logger=logger))
+    val_loader = build_dataloader(val_dataset, rank=sr.rank, world_size=sr.world_size, shuffle=False, drop_last=False, **sr.cfg.solver.val)
 
-    test_dataset = build_dataset(cfg.dataset.test, default_args=dict(logger=logger))
-    test_loader = build_dataloader(test_dataset, rank=rank, world_size=world_size, shuffle=False, drop_last=False, **cfg.solver.test)
+    test_dataset = build_dataset(sr.cfg.dataset.test, default_args=dict(logger=logger))
+    test_loader = build_dataloader(test_dataset, rank=sr.rank, world_size=sr.world_size, shuffle=False, drop_last=False, **sr.cfg.solver.test)
 
     # build model
-    cfg.model['backbone']['custom']['pretrain'] = 'data/' + cfg.model['backbone']['custom']['pretrain']
-    model = build_detector(cfg.model)
+    sr.cfg.model['backbone']['custom']['pretrain'] = 'data/' + sr.cfg.model['backbone']['custom']['pretrain']
+    model = build_detector(sr.cfg.model)
 
     # DDP
-    use_static_graph = getattr(cfg.solver, "static_graph", False)
-    model = model.to(local_rank)
-    model = DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False if use_static_graph else True, static_graph=use_static_graph)  # default is False, should be true when use activation checkpointing in E2E
-    logger.info(f"Using DDP with total {world_size} GPUS...")
+    use_static_graph = getattr(sr.cfg.solver, "static_graph", False)
+    model = model.to(sr.local_rank)
+    model = DistributedDataParallel(model, device_ids=[sr.local_rank], output_device=sr.local_rank, find_unused_parameters=False if use_static_graph else True, static_graph=use_static_graph)  # default is False, should be true when use activation checkpointing in E2E
+    logger.info(f"Using DDP with total {sr.world_size} GPUS...")
 
     # FP16 compression
-    use_fp16_compress = getattr(cfg.solver, "fp16_compress", False)
+    use_fp16_compress = getattr(sr.cfg.solver, "fp16_compress", False)
     if use_fp16_compress:
         logger.info("Using FP16 compression ...")
         model.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
 
     # Model EMA
-    use_ema = getattr(cfg.solver, "ema", False)
+    use_ema = getattr(sr.cfg.solver, "ema", False)
     if use_ema:
         logger.info("Using Model EMA...")
         model_ema = ModelEma(model.module)
@@ -140,7 +134,7 @@ def main():
         model_ema = None
 
     # AMP: automatic mixed precision
-    use_amp = getattr(cfg.solver, "amp", False)
+    use_amp = getattr(sr.cfg.solver, "amp", False)
     if use_amp:
         logger.info("Using Automatic Mixed Precision...")
         # GradScaler is only needed for float16 AMP, not bfloat16.
@@ -151,24 +145,24 @@ def main():
         scaler = None
 
     # build optimizer and scheduler
-    optimizer = build_optimizer(cfg.optimizer, model, logger)
-    scheduler, max_epoch = build_scheduler(cfg.scheduler, optimizer, len(train_loader))
+    optimizer = build_optimizer(sr.cfg.optimizer, model, logger)
+    scheduler, max_epoch = build_scheduler(sr.cfg.scheduler, optimizer, len(train_loader))
 
     # override the max_epoch
-    max_epoch = cfg.workflow.get("end_epoch", max_epoch)
+    max_epoch = sr.cfg.workflow.get("end_epoch", max_epoch)
 
     # --- Early Stopping Parameters Initialization ---
     val_loss_best = 1e6  # Initialize best validation loss
     epochs_no_improve = 0  # Counter for epochs without improvement
     # Get early stopping patience and min_delta from config, with defaults
-    early_stopping_patience = cfg.workflow.get("early_stopping_patience", -1)  # -1 means disabled
-    early_stopping_min_delta = cfg.workflow.get("early_stopping_min_delta", 0.0)  # 0.0 means any improvement counts
+    early_stopping_patience = sr.cfg.workflow.get("early_stopping_patience", -1)  # -1 means disabled
+    early_stopping_min_delta = sr.cfg.workflow.get("early_stopping_min_delta", 0.0)  # 0.0 means any improvement counts
     # measure gflops
 
     # resume: reset epoch, load checkpoint / best rmse
     if resume is not None:
         logger.info("Resume training from: {}".format(resume))
-        device = f"cuda:{local_rank}"
+        device = f"cuda:{sr.local_rank}"
         checkpoint = torch.load(resume, map_location=device)
         resume_epoch = checkpoint["epoch"]
         logger.info("Resume epoch is {}".format(resume_epoch))
@@ -192,23 +186,23 @@ def main():
 
     # train the detector
     logger.info("Training Starts...\n")
-    val_start_epoch = cfg.workflow.get("val_start_epoch", 0)  # Already defined, just keeping it here for clarity
+    val_start_epoch = sr.cfg.workflow.get("val_start_epoch", 0)  # Already defined, just keeping it here for clarity
     for epoch in range(resume_epoch + 1, max_epoch):
         train_loader.sampler.set_epoch(epoch)
         # train for one epoch
-        train_one_epoch(train_loader, model, optimizer, scheduler, epoch, logger, rank=rank, model_ema=model_ema, clip_grad_l2norm=cfg.solver.clip_grad_norm, logging_interval=cfg.workflow.logging_interval, scaler=scaler, use_amp=use_amp)
+        train_one_epoch(train_loader, model, optimizer, scheduler, epoch, logger, rank=sr.rank, model_ema=model_ema, clip_grad_l2norm=sr.cfg.solver.clip_grad_norm, logging_interval=sr.cfg.workflow.logging_interval, scaler=scaler, use_amp=use_amp)
 
         # save checkpoint
-        if (epoch == max_epoch - 1) or ((epoch + 1) % cfg.workflow.checkpoint_interval == 0):
-            if rank == 0:
-                save_checkpoint(model, model_ema, optimizer, scheduler, epoch, work_dir=cfg.work_dir)
+        if (epoch == max_epoch - 1) or ((epoch + 1) % sr.cfg.workflow.checkpoint_interval == 0):
+            if sr.rank == 0:
+                save_checkpoint(model, model_ema, optimizer, scheduler, epoch, work_dir=sr.cfg.work_dir)
 
         # val for one epoch and early stopping check
         # None = no val loss computed this epoch, so eval falls back to its interval
         val_loss_improved = None
         if epoch >= val_start_epoch:
-            if (cfg.workflow.val_loss_interval > 0) and ((epoch + 1) % cfg.workflow.val_loss_interval == 0):
-                val_loss = val_one_epoch(val_loader, model, logger, rank, epoch, model_ema=model_ema, use_amp=use_amp)
+            if (sr.cfg.workflow.val_loss_interval > 0) and ((epoch + 1) % sr.cfg.workflow.val_loss_interval == 0):
+                val_loss = val_one_epoch(val_loader, model, logger, sr.rank, epoch, model_ema=model_ema, use_amp=use_amp)
 
                 # --- Early Stopping and Best Checkpoint Saving Logic ---
                 # Only activate early stopping if patience is set (i.e., not -1)
@@ -219,9 +213,9 @@ def main():
                         val_loss_best = val_loss  # Update the best loss
                         epochs_no_improve = 0  # Reset counter
                         val_loss_improved = True
-                        if rank == 0:
+                        if sr.rank == 0:
                             # Save the best model only when significant improvement is observed
-                            save_best_checkpoint(model, model_ema, epoch, work_dir=cfg.work_dir)
+                            save_best_checkpoint(model, model_ema, epoch, work_dir=sr.cfg.work_dir)
                     else:
                         # No significant improvement, increment counter
                         epochs_no_improve += 1
@@ -238,32 +232,32 @@ def main():
                         logger.info(f"New best epoch {epoch} based on val_loss: {val_loss:.4f}.")
                         val_loss_best = val_loss
                         val_loss_improved = True
-                        if rank == 0:
-                            save_best_checkpoint(model, model_ema, epoch, work_dir=cfg.work_dir)
+                        if sr.rank == 0:
+                            save_best_checkpoint(model, model_ema, epoch, work_dir=sr.cfg.work_dir)
                     else:
                         val_loss_improved = False
 
         # eval for one epoch (evaluation metrics, not for early stopping loss)
         # skipped when the val loss did not improve this epoch
         if epoch >= val_start_epoch and val_loss_improved is not False:
-            if (cfg.workflow.val_eval_interval > 0) and ((epoch + 1) % cfg.workflow.val_eval_interval == 0):
-                eval_one_epoch(test_loader, model, cfg, logger, rank, model_ema=model_ema, use_amp=use_amp, world_size=world_size, not_eval=True, training=True)
-        elif val_loss_improved is False and (cfg.workflow.val_eval_interval > 0) and ((epoch + 1) % cfg.workflow.val_eval_interval == 0):
+            if (sr.cfg.workflow.val_eval_interval > 0) and ((epoch + 1) % sr.cfg.workflow.val_eval_interval == 0):
+                eval_one_epoch(test_loader, model, sr.cfg, logger, sr.rank, model_ema=model_ema, use_amp=use_amp, world_size=sr.world_size, not_eval=True, training=True)
+        elif val_loss_improved is False and (sr.cfg.workflow.val_eval_interval > 0) and ((epoch + 1) % sr.cfg.workflow.val_eval_interval == 0):
             logger.info(f"Skipping evaluation at epoch {epoch}: val_loss did not improve.")
     logger.info("Training Over...\n")
 
     # Load best model if exists
-    best_checkpoint_path = os.path.join(cfg.work_dir, "checkpoint", "best.pth")
+    best_checkpoint_path = os.path.join(sr.cfg.work_dir, "checkpoint", "best.pth")
     if os.path.exists(best_checkpoint_path):
         logger.info(f"Loading best checkpoint from {best_checkpoint_path} for final evaluation...")
-        checkpoint = torch.load(best_checkpoint_path, map_location=f"cuda:{local_rank}")
+        checkpoint = torch.load(best_checkpoint_path, map_location=f"cuda:{sr.local_rank}")
         model.load_state_dict(checkpoint["state_dict"])
         if model_ema is not None and "state_dict_ema" in checkpoint:
             model_ema.module.load_state_dict(checkpoint["state_dict_ema"])
     else:
         logger.info("Best checkpoint not found. Using the last model for final evaluation.")
-    eval_one_epoch(test_loader, model, cfg, logger, rank, model_ema=model_ema, use_amp=use_amp, world_size=world_size, not_eval=True, training=True)
-    if use_wandb and rank == 0:
+    eval_one_epoch(test_loader, model, sr.cfg, logger, sr.rank, model_ema=model_ema, use_amp=use_amp, world_size=sr.world_size, not_eval=True, training=True)
+    if use_wandb and sr.rank == 0:
         wandb.finish()
 
 
