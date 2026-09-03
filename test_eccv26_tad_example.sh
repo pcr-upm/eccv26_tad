@@ -1,6 +1,6 @@
 #!/bin/bash
 echo 'Using Docker to start the container and run tests ...'
-sudo docker build --force-rm --build-arg SSH_PRIVATE_KEY="$(cat ~/.ssh/id_rsa)" -t eccv26_tad_image .
+sudo docker build --force-rm --ssh default=$HOME/.ssh/id_rsa -t eccv26_tad_image .
 sudo docker volume create --name eccv26_tad_volume
 sudo docker run --name eccv26_tad_container -v eccv26_tad_volume:/home/username --ipc=host --rm --gpus all -it -d eccv26_tad_image bash
 #sudo docker run --name eccv26_tad_container -v /media/bobetocalo/database/classification/humans:/datasets --ipc host --rm --gpus all -it eccv26_tad_image bash
@@ -14,3 +14,4 @@ sudo chown -R "${USER}":"${USER}" /var/lib/docker/
 rsync --delete -azvv /var/lib/docker/volumes/eccv26_tad_volume/_data/conda/envs/eccv26/lib/python3.10/site-packages/images_framework/output/images/ output
 sudo docker volume rm eccv26_tad_volume
 sudo docker image rm eccv26_tad_image
+sudo docker builder prune -a -f

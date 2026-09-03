@@ -151,7 +151,8 @@ class ECCV26TAD(Recognition):
         self.model = self.model.to(self.device)
         # DDP
         if torchrun_mode:
-            self.model = DistributedDataParallel(self.model, device_ids=[self.local_rank], output_device=self.local_rank)
+            use_static_graph = getattr(self.cfg.solver, 'static_graph', False)
+            self.model = DistributedDataParallel(self.model, device_ids=[self.local_rank], output_device=self.local_rank, find_unused_parameters=False if use_static_graph else True, static_graph=use_static_graph)  # default is False, should be true when use activation checkpointing in E2E
             print(f'Using DDP with total {self.world_size} GPUS...')
         # [batch, num_clips, channels, T, H, W]
         window_size = getattr(self.cfg, 'window_size', 768)

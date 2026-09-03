@@ -93,8 +93,6 @@ def main():
         sr.cfg = override_dataset_paths(sr.cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
     if cfg_options:
         sr.cfg.merge_from_dict(cfg_options)
-    sr.cfg.work_dir = sr.path
-    sr.cfg.post_processing.save_dict = True
     if save_video:
         viewer = Viewer('eccv26_tad_test')
         spec = importlib.util.find_spec('images_framework')

@@ -12,8 +12,6 @@ import wandb
 import random
 import string
 from torch.distributed.algorithms.ddp_comm_hooks import default as comm_hooks
-from torch.nn.parallel import DistributedDataParallel
-from opentad.models import build_detector
 from opentad.datasets import build_dataset, build_dataloader
 from opentad.cores import train_one_epoch, val_one_epoch, eval_one_epoch, build_optimizer, build_scheduler
 from opentad.utils import update_workdir, override_dataset_paths,create_folder, save_config, setup_logger, ModelEma, save_checkpoint, save_best_checkpoint
@@ -73,12 +71,11 @@ def main():
     sr = ECCV26TAD('')
     composite.add(sr)
     composite.parse_options(unknown)
-    # composite.load(Modes.TRAIN)
+    composite.load(Modes.TRAIN)
     if ann_file or class_map or data_root or block_list or external_cls_path:
         sr.cfg = override_dataset_paths(sr.cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
     if cfg_options:
         sr.cfg.merge_from_dict(cfg_options)
-    sr.cfg.work_dir = sr.path
     # Generate random three letter run id
     run_id = "".join([random.choice(string.ascii_lowercase) for _ in range(3)])
     sr.cfg.work_dir = os.path.join(sr.cfg.work_dir, run_id)
@@ -87,7 +84,7 @@ def main():
     sr.cfg = update_workdir(sr.cfg, id, sr.world_size)
     if sr.rank == 0:
         create_folder(sr.cfg.work_dir)
-        save_config(sr.cfg, sr.cfg.work_dir)
+        save_config('configs/vitsparse/thumos/e2e_thumos_videomae_b_768x1_160_sparse_adapter.py', sr.cfg.work_dir)
 
     # setup logger
     logger = setup_logger("Train", save_dir=sr.cfg.work_dir, distributed_rank=sr.rank)
@@ -96,7 +93,7 @@ def main():
 
     # setup wandb
     if use_wandb and sr.rank == 0:
-        run_name = os.path.basename(sr.cfg).split(".")[0] + f"_id{id}"
+        run_name = os.path.basename('configs/vitsparse/thumos/e2e_thumos_videomae_b_768x1_160_sparse_adapter.py').split(".")[0] + f"_id{id}"
         wandb.init(project=project, name=run_name, config=sr.cfg.to_dict())
 
     # build dataset
@@ -109,27 +106,17 @@ def main():
     test_dataset = build_dataset(sr.cfg.dataset.test, default_args=dict(logger=logger))
     test_loader = build_dataloader(test_dataset, rank=sr.rank, world_size=sr.world_size, shuffle=False, drop_last=False, **sr.cfg.solver.test)
 
-    # build model
-    sr.cfg.model['backbone']['custom']['pretrain'] = 'data/' + sr.cfg.model['backbone']['custom']['pretrain']
-    model = build_detector(sr.cfg.model)
-
-    # DDP
-    use_static_graph = getattr(sr.cfg.solver, "static_graph", False)
-    model = model.to(sr.local_rank)
-    model = DistributedDataParallel(model, device_ids=[sr.local_rank], output_device=sr.local_rank, find_unused_parameters=False if use_static_graph else True, static_graph=use_static_graph)  # default is False, should be true when use activation checkpointing in E2E
-    logger.info(f"Using DDP with total {sr.world_size} GPUS...")
-
     # FP16 compression
     use_fp16_compress = getattr(sr.cfg.solver, "fp16_compress", False)
     if use_fp16_compress:
         logger.info("Using FP16 compression ...")
-        model.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
+        sr.model.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
 
     # Model EMA
     use_ema = getattr(sr.cfg.solver, "ema", False)
     if use_ema:
         logger.info("Using Model EMA...")
-        model_ema = ModelEma(model.module)
+        model_ema = ModelEma(sr.model.module)
     else:
         model_ema = None
 
@@ -145,7 +132,7 @@ def main():
         scaler = None
 
     # build optimizer and scheduler
-    optimizer = build_optimizer(sr.cfg.optimizer, model, logger)
+    optimizer = build_optimizer(sr.cfg.optimizer, sr.model, logger)
     scheduler, max_epoch = build_scheduler(sr.cfg.scheduler, optimizer, len(train_loader))
 
     # override the max_epoch
@@ -166,7 +153,7 @@ def main():
         checkpoint = torch.load(resume, map_location=device)
         resume_epoch = checkpoint["epoch"]
         logger.info("Resume epoch is {}".format(resume_epoch))
-        model.load_state_dict(checkpoint["state_dict"])
+        sr.model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         scheduler.load_state_dict(checkpoint["scheduler"])
         if model_ema is not None:
@@ -190,19 +177,19 @@ def main():
     for epoch in range(resume_epoch + 1, max_epoch):
         train_loader.sampler.set_epoch(epoch)
         # train for one epoch
-        train_one_epoch(train_loader, model, optimizer, scheduler, epoch, logger, rank=sr.rank, model_ema=model_ema, clip_grad_l2norm=sr.cfg.solver.clip_grad_norm, logging_interval=sr.cfg.workflow.logging_interval, scaler=scaler, use_amp=use_amp)
+        train_one_epoch(train_loader, sr.model, optimizer, scheduler, epoch, logger, rank=sr.rank, model_ema=model_ema, clip_grad_l2norm=sr.cfg.solver.clip_grad_norm, logging_interval=sr.cfg.workflow.logging_interval, scaler=scaler, use_amp=use_amp)
 
         # save checkpoint
         if (epoch == max_epoch - 1) or ((epoch + 1) % sr.cfg.workflow.checkpoint_interval == 0):
             if sr.rank == 0:
-                save_checkpoint(model, model_ema, optimizer, scheduler, epoch, work_dir=sr.cfg.work_dir)
+                save_checkpoint(sr.model, model_ema, optimizer, scheduler, epoch, work_dir=sr.cfg.work_dir)
 
         # val for one epoch and early stopping check
         # None = no val loss computed this epoch, so eval falls back to its interval
         val_loss_improved = None
         if epoch >= val_start_epoch:
             if (sr.cfg.workflow.val_loss_interval > 0) and ((epoch + 1) % sr.cfg.workflow.val_loss_interval == 0):
-                val_loss = val_one_epoch(val_loader, model, logger, sr.rank, epoch, model_ema=model_ema, use_amp=use_amp)
+                val_loss = val_one_epoch(val_loader, sr.model, logger, sr.rank, epoch, model_ema=model_ema, use_amp=use_amp)
 
                 # --- Early Stopping and Best Checkpoint Saving Logic ---
                 # Only activate early stopping if patience is set (i.e., not -1)
@@ -215,7 +202,7 @@ def main():
                         val_loss_improved = True
                         if sr.rank == 0:
                             # Save the best model only when significant improvement is observed
-                            save_best_checkpoint(model, model_ema, epoch, work_dir=sr.cfg.work_dir)
+                            save_best_checkpoint(sr.model, model_ema, epoch, work_dir=sr.cfg.work_dir)
                     else:
                         # No significant improvement, increment counter
                         epochs_no_improve += 1
@@ -233,7 +220,7 @@ def main():
                         val_loss_best = val_loss
                         val_loss_improved = True
                         if sr.rank == 0:
-                            save_best_checkpoint(model, model_ema, epoch, work_dir=sr.cfg.work_dir)
+                            save_best_checkpoint(sr.model, model_ema, epoch, work_dir=sr.cfg.work_dir)
                     else:
                         val_loss_improved = False
 
@@ -241,7 +228,7 @@ def main():
         # skipped when the val loss did not improve this epoch
         if epoch >= val_start_epoch and val_loss_improved is not False:
             if (sr.cfg.workflow.val_eval_interval > 0) and ((epoch + 1) % sr.cfg.workflow.val_eval_interval == 0):
-                eval_one_epoch(test_loader, model, sr.cfg, logger, sr.rank, model_ema=model_ema, use_amp=use_amp, world_size=sr.world_size, not_eval=True, training=True)
+                eval_one_epoch(test_loader, sr.model, sr.cfg, logger, sr.rank, model_ema=model_ema, use_amp=use_amp, world_size=sr.world_size, not_eval=True, training=True)
         elif val_loss_improved is False and (sr.cfg.workflow.val_eval_interval > 0) and ((epoch + 1) % sr.cfg.workflow.val_eval_interval == 0):
             logger.info(f"Skipping evaluation at epoch {epoch}: val_loss did not improve.")
     logger.info("Training Over...\n")
@@ -251,12 +238,12 @@ def main():
     if os.path.exists(best_checkpoint_path):
         logger.info(f"Loading best checkpoint from {best_checkpoint_path} for final evaluation...")
         checkpoint = torch.load(best_checkpoint_path, map_location=f"cuda:{sr.local_rank}")
-        model.load_state_dict(checkpoint["state_dict"])
+        sr.model.load_state_dict(checkpoint["state_dict"])
         if model_ema is not None and "state_dict_ema" in checkpoint:
             model_ema.module.load_state_dict(checkpoint["state_dict_ema"])
     else:
         logger.info("Best checkpoint not found. Using the last model for final evaluation.")
-    eval_one_epoch(test_loader, model, sr.cfg, logger, sr.rank, model_ema=model_ema, use_amp=use_amp, world_size=sr.world_size, not_eval=True, training=True)
+    eval_one_epoch(test_loader, sr.model, sr.cfg, logger, sr.rank, model_ema=model_ema, use_amp=use_amp, world_size=sr.world_size, not_eval=True, training=True)
     if use_wandb and sr.rank == 0:
         wandb.finish()
 
