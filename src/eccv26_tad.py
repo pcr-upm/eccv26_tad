@@ -6,6 +6,7 @@ __email__ = 'ricardo.pizarroc@edu.uah.es'
 import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
+import torch
 import numpy as np
 from mmengine.dataset import Compose
 from opentad.utils import set_seed
@@ -100,7 +101,7 @@ class ECCV26TAD(Recognition):
         args, unknown = parser.parse_known_args(params)
         print(parser.format_usage())
         self.cfg = Config.fromfile(args.config)
-        self.cfg.work_dir = self.path
+        self.cfg.work_dir = self.path + self.cfg.work_dir
         self.cfg.post_processing.save_dict = True
         self.gpu = args.gpu
         self.ckpt = args.ckpt
@@ -120,17 +121,160 @@ class ECCV26TAD(Recognition):
             raise ValueError('Database is not implemented')
 
     def train(self, anns_train, anns_valid):
-        print('Training model')
+        from opentad.datasets import build_dataset, build_dataloader
+        from opentad.cores import train_one_epoch, val_one_epoch, eval_one_epoch, build_optimizer, build_scheduler
+        from opentad.utils import setup_logger, save_checkpoint, save_best_checkpoint
+
+        # setup logger
+        logger = setup_logger("Train", save_dir=self.cfg.work_dir, distributed_rank=self.rank)
+        logger.info(f"Using torch version: {torch.__version__}, CUDA version: {torch.version.cuda}")
+        logger.info(f"Config: \n{self.cfg.pretty_text}")
+
+        # build dataset
+        train_dataset = build_dataset(self.cfg.dataset.train, default_args=dict(logger=logger))
+        train_loader = build_dataloader(train_dataset, rank=self.rank, world_size=self.world_size, shuffle=True, drop_last=True, **self.cfg.solver.train)
+
+        val_dataset = build_dataset(self.cfg.dataset.val, default_args=dict(logger=logger))
+        val_loader = build_dataloader(val_dataset, rank=self.rank, world_size=self.world_size, shuffle=False, drop_last=False, **self.cfg.solver.val)
+
+        test_dataset = build_dataset(self.cfg.dataset.test, default_args=dict(logger=logger))
+        test_loader = build_dataloader(test_dataset, rank=self.rank, world_size=self.world_size, shuffle=False, drop_last=False, **self.cfg.solver.test)
+
+        # AMP: automatic mixed precision
+        use_amp = getattr(self.cfg.solver, "amp", False)
+        if use_amp:
+            logger.info("Using Automatic Mixed Precision...")
+            # GradScaler is only needed for float16 AMP, not bfloat16.
+            # bfloat16 has the same dynamic range as float32, so loss scaling
+            # is unnecessary and can introduce NaN from rounding errors.
+            scaler = None
+        else:
+            scaler = None
+
+        # build optimizer and scheduler
+        optimizer = build_optimizer(self.cfg.optimizer, self.model, logger)
+        scheduler, max_epoch = build_scheduler(self.cfg.scheduler, optimizer, len(train_loader))
+
+        # override the max_epoch
+        max_epoch = self.cfg.workflow.get("end_epoch", max_epoch)
+
+        # --- Early Stopping Parameters Initialization ---
+        val_loss_best = 1e6  # Initialize best validation loss
+        epochs_no_improve = 0  # Counter for epochs without improvement
+        # Get early stopping patience and min_delta from config, with defaults
+        early_stopping_patience = self.cfg.workflow.get("early_stopping_patience", -1)  # -1 means disabled
+        early_stopping_min_delta = self.cfg.workflow.get("early_stopping_min_delta", 0.0)  # 0.0 means any improvement counts
+        # measure gflops
+
+        # resume: reset epoch, load checkpoint / best rmse
+        if self.ckpt is not None:
+            logger.info("Resume training from: {}".format(self.ckpt))
+            device = f"cuda:{self.local_rank}"
+            checkpoint = torch.load(self.ckpt, map_location=device)
+            resume_epoch = checkpoint["epoch"]
+            logger.info("Resume epoch is {}".format(resume_epoch))
+            self.model.load_state_dict(checkpoint["state_dict"])
+            optimizer.load_state_dict(checkpoint["optimizer"])
+            scheduler.load_state_dict(checkpoint["scheduler"])
+            if self.model_ema is not None:
+                self.model_ema.module.load_state_dict(checkpoint["state_dict_ema"])
+
+            # If resuming, ideally load previous best_val_loss and epochs_no_improve
+            # For simplicity here, we re-initialize them, meaning early stopping
+            # will start fresh from the resume point. The loaded model state
+            # will still reflect the best from prior training.
+            # val_loss_best = checkpoint.get("val_loss_best", val_loss_best)
+            # epochs_no_improve = checkpoint.get("epochs_no_improve", epochs_no_improve)
+
+            del checkpoint  #  save memory if the model is very large such as ViT-g
+            torch.cuda.empty_cache()
+        else:
+            resume_epoch = -1
+
+        # train the detector
+        logger.info("Training Starts...\n")
+        val_start_epoch = self.cfg.workflow.get("val_start_epoch", 0)  # Already defined, just keeping it here for clarity
+        for epoch in range(resume_epoch + 1, max_epoch):
+            train_loader.sampler.set_epoch(epoch)
+            # train for one epoch
+            train_one_epoch(train_loader, self.model, optimizer, scheduler, epoch, logger, rank=self.rank, model_ema=self.model_ema, clip_grad_l2norm=self.cfg.solver.clip_grad_norm, logging_interval=self.cfg.workflow.logging_interval, scaler=scaler, use_amp=use_amp)
+
+            # save checkpoint
+            if (epoch == max_epoch - 1) or ((epoch + 1) % self.cfg.workflow.checkpoint_interval == 0):
+                if self.rank == 0:
+                    save_checkpoint(self.model, self.model_ema, optimizer, scheduler, epoch, work_dir=self.cfg.work_dir)
+
+            # val for one epoch and early stopping check
+            # None = no val loss computed this epoch, so eval falls back to its interval
+            val_loss_improved = None
+            if epoch >= val_start_epoch:
+                if (self.cfg.workflow.val_loss_interval > 0) and ((epoch + 1) % self.cfg.workflow.val_loss_interval == 0):
+                    val_loss = val_one_epoch(val_loader, self.model, logger, self.rank, epoch, model_ema=self.model_ema, use_amp=use_amp)
+
+                    # --- Early Stopping and Best Checkpoint Saving Logic ---
+                    # Only activate early stopping if patience is set (i.e., not -1)
+                    if early_stopping_patience > 0:
+                        # Check for significant improvement
+                        if val_loss < val_loss_best - early_stopping_min_delta:
+                            logger.info(f"Validation loss improved from {val_loss_best:.4f} to {val_loss:.4f}. Resetting early stopping counter.")
+                            val_loss_best = val_loss  # Update the best loss
+                            epochs_no_improve = 0  # Reset counter
+                            val_loss_improved = True
+                            if self.rank == 0:
+                                # Save the best model only when significant improvement is observed
+                                save_best_checkpoint(self.model, self.model_ema, epoch, work_dir=self.cfg.work_dir)
+                        else:
+                            # No significant improvement, increment counter
+                            epochs_no_improve += 1
+                            val_loss_improved = False
+                            logger.info(f"Validation loss did not improve significantly. Early stopping counter: {epochs_no_improve}/{early_stopping_patience}.")
+
+                        # Check if early stopping condition is met
+                        if epochs_no_improve >= early_stopping_patience:
+                            logger.info(f"Early stopping triggered after {epochs_no_improve} epochs without significant improvement. Training will stop.")
+                            break  # Exit the training loop
+                    else:
+                        # If early stopping is not enabled, use the original logic for saving best checkpoint
+                        if val_loss < val_loss_best:
+                            logger.info(f"New best epoch {epoch} based on val_loss: {val_loss:.4f}.")
+                            val_loss_best = val_loss
+                            val_loss_improved = True
+                            if self.rank == 0:
+                                save_best_checkpoint(self.model, self.model_ema, epoch, work_dir=self.cfg.work_dir)
+                        else:
+                            val_loss_improved = False
+
+            # eval for one epoch (evaluation metrics, not for early stopping loss)
+            # skipped when the val loss did not improve this epoch
+            if epoch >= val_start_epoch and val_loss_improved is not False:
+                if (self.cfg.workflow.val_eval_interval > 0) and ((epoch + 1) % self.cfg.workflow.val_eval_interval == 0):
+                    eval_one_epoch(test_loader, self.model, self.cfg, logger, self.rank, model_ema=self.model_ema, use_amp=use_amp, world_size=self.world_size, not_eval=True, training=True)
+            elif val_loss_improved is False and (self.cfg.workflow.val_eval_interval > 0) and ((epoch + 1) % self.cfg.workflow.val_eval_interval == 0):
+                logger.info(f"Skipping evaluation at epoch {epoch}: val_loss did not improve.")
+        logger.info("Training Over...\n")
+
+        # Load best model if exists
+        best_checkpoint_path = os.path.join(self.cfg.work_dir, "checkpoint", "best.pth")
+        if os.path.exists(best_checkpoint_path):
+            logger.info(f"Loading best checkpoint from {best_checkpoint_path} for final evaluation...")
+            checkpoint = torch.load(best_checkpoint_path, map_location=f"cuda:{self.local_rank}")
+            self.model.load_state_dict(checkpoint["state_dict"])
+            if self.model_ema is not None and "state_dict_ema" in checkpoint:
+                self.model_ema.module.load_state_dict(checkpoint["state_dict_ema"])
+        else:
+            logger.info("Best checkpoint not found. Using the last model for final evaluation.")
+        eval_one_epoch(test_loader, self.model, self.cfg, logger, self.rank, model_ema=self.model_ema, use_amp=use_amp, world_size=self.world_size, not_eval=True, training=True)
 
     def load(self, mode):
-        import torch
         import torchinfo
         import torch.distributed as dist
+        from torch.distributed.algorithms.ddp_comm_hooks import default as comm_hooks
         from torch.nn.parallel import DistributedDataParallel
         from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
-        from images_framework.src.constants import Modes
         from opentad.models import build_detector
-        from opentad.utils import remap_legacy_sparse_conv_weights
+        from opentad.utils import remap_legacy_sparse_conv_weights, ModelEma
+        from images_framework.src.constants import Modes
+
         # DDP initialization for torchrun execution
         torchrun_mode = 'LOCAL_RANK' in os.environ and 'RANK' in os.environ and 'WORLD_SIZE' in os.environ
         if torchrun_mode:
@@ -158,8 +302,20 @@ class ECCV26TAD(Recognition):
         window_size = getattr(self.cfg, 'window_size', 768)
         img_size = self.cfg.model['backbone']['backbone']['img_size']
         torchinfo.summary(self.model.module.backbone if torchrun_mode else self.model.backbone, input_size=(1, 1, 3, window_size, img_size, img_size), depth=5, device=self.device, col_names=['input_size', 'output_size', 'num_params', 'kernel_size'])
+        # FP16 compression
+        use_fp16_compress = getattr(self.cfg.solver, 'fp16_compress', False)
+        if use_fp16_compress:
+            print('Using FP16 compression ...')
+            self.model.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
+        # Model EMA
+        self.model_ema = None
+        use_ema = getattr(self.cfg.solver, 'ema', False)
+        if use_ema:
+            print('Using Model EMA ...')
+            if mode is Modes.TRAIN:
+                self.model_ema = ModelEma(self.model.module)
         if mode is Modes.TEST:
-            # Load checkpoint (args -> config -> best)
+            # Load checkpoint
             if self.ckpt != 'none':
                 checkpoint_path = self.ckpt
             elif 'test_epoch' in self.cfg.inference.keys():
@@ -169,17 +325,12 @@ class ECCV26TAD(Recognition):
             print(f'Loading checkpoint from: {checkpoint_path}')
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
             print(f'Checkpoint is epoch {checkpoint.get("epoch", "unknown")}.')
-            # Model EMA
-            use_ema = getattr(self.cfg.solver, "ema", False)
-            state_dict = checkpoint["state_dict_ema"] if use_ema else checkpoint["state_dict"]
+            state_dict = checkpoint['state_dict_ema'] if use_ema else checkpoint['state_dict']
             # Older checkpoints may or may not carry the DDP "module." prefix depending on
             # how EMA/the model were wrapped at save time; normalize before comparing/loading.
-            consume_prefix_in_state_dict_if_present(state_dict, prefix="module.")
+            consume_prefix_in_state_dict_if_present(state_dict, prefix='module.')
             state_dict = remap_legacy_sparse_conv_weights(state_dict, self.model.module.state_dict() if torchrun_mode else self.model.state_dict())
             self.model.module.load_state_dict(state_dict, strict=False) if torchrun_mode else self.model.load_state_dict(state_dict)
-            if use_ema:
-                print("Using Model EMA...")
-            self.model.eval()
 
     def get_video_id(self, filename):
         if self.database == 'attach':
@@ -195,7 +346,6 @@ class ECCV26TAD(Recognition):
     def process(self, ann, pred):
         import cv2
         import json
-        import torch.utils.data
         from opentad.cores import eval_one_epoch
         from opentad.datasets.builder import collate as default_collate
         from images_framework.src.annotations import TemporalCategory

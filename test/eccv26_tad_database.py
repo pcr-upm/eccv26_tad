@@ -8,6 +8,7 @@ import sys
 sys.path.append(os.getcwd())
 import cv2
 import copy
+import wandb
 import importlib.util
 from tqdm import tqdm
 from pathlib import Path
@@ -122,7 +123,6 @@ def main():
             viewer.save(dirname, as_video=True, format='avi', fps=30, codec='XVID')
 
     # Compute metrics
-    import wandb
     print('Evaluation starts...')
     wandb.init(project=sr.cfg.get('project_name', 'opentad'), config=sr.cfg)
     evaluator = build_evaluator(dict(prediction_filename=result_dict, **sr.cfg.evaluation))
