@@ -96,7 +96,7 @@ class ECCV26TAD(Recognition):
                             help='GPU ID (negative value indicates CPU).')
         parser.add_argument('--config', metavar='FILE', type=str, 
                             help='Path to config file.')
-        parser.add_argument('--ckpt', type=str, default='none', 
+        parser.add_argument('--ckpt', type=str, default=None, 
                             help='The checkpoint path.')
         args, unknown = parser.parse_known_args(params)
         print(parser.format_usage())
@@ -316,7 +316,7 @@ class ECCV26TAD(Recognition):
                 self.model_ema = ModelEma(self.model.module)
         if mode is Modes.TEST:
             # Load checkpoint
-            if self.ckpt != 'none':
+            if self.ckpt is not None:
                 checkpoint_path = self.ckpt
             elif 'test_epoch' in self.cfg.inference.keys():
                 checkpoint_path = model_path + f'checkpoint/epoch_{self.cfg.inference.test_epoch}.pth'
