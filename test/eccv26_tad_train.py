@@ -64,11 +64,12 @@ def main():
     sr = ECCV26TAD('')
     composite.add(sr)
     composite.parse_options(unknown)
-    composite.load(Modes.TRAIN)
     if ann_file or class_map or data_root or block_list or external_cls_path:
         sr.cfg = override_dataset_paths(sr.cfg, ann_file=ann_file, class_map=class_map, data_path=data_root, block_list=block_list, external_cls_path=external_cls_path)
     if cfg_options:
         sr.cfg.merge_from_dict(cfg_options)
+    print(f"Config: \n{sr.cfg.pretty_text}")
+    composite.load(Modes.TRAIN)
     # Generate random three letter run id
     run_id = "".join([random.choice(string.ascii_lowercase) for _ in range(3)])
     sr.cfg.work_dir = os.path.join(sr.cfg.work_dir, run_id)

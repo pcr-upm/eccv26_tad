@@ -101,8 +101,6 @@ class ECCV26TAD(Recognition):
         args, unknown = parser.parse_known_args(params)
         print(parser.format_usage())
         self.cfg = Config.fromfile(args.config)
-        self.cfg.work_dir = self.path + self.cfg.work_dir
-        self.cfg.post_processing.save_dict = True
         self.gpu = args.gpu
         self.ckpt = args.ckpt
         if self.database == 'thumos':

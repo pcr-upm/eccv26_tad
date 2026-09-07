@@ -81,11 +81,14 @@ def main():
     sr = ECCV26TAD('')
     composite.add(sr)
     composite.parse_options(unknown)
-    composite.load(Modes.TEST)
+    sr.cfg.work_dir = sr.path
+    sr.cfg.post_processing.save_dict = True
     if data_root or external_cls_path:
         sr.cfg = override_dataset_paths(sr.cfg, data_path=data_root, external_cls_path=external_cls_path)
     if cfg_options:
         sr.cfg.merge_from_dict(cfg_options)
+    print(f"Config: \n{sr.cfg.pretty_text}")
+    composite.load(Modes.TEST)
     if save_video:
         viewer = Viewer('eccv26_tad_test')
         spec = importlib.util.find_spec('images_framework')
