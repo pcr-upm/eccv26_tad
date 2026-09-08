@@ -10,7 +10,8 @@ import cv2
 import wandb
 import random
 import string
-from opentad.utils import update_workdir, override_dataset_paths,create_folder, save_config
+from pathlib import Path
+from opentad.utils import override_dataset_paths
 from images_framework.src.constants import Modes
 from images_framework.src.composite import Composite
 from src.eccv26_tad import ECCV26TAD
@@ -72,19 +73,17 @@ def main():
     composite.load(Modes.TRAIN)
     # Generate random three letter run id
     run_id = "".join([random.choice(string.ascii_lowercase) for _ in range(3)])
-    sr.cfg.work_dir = os.path.join(sr.cfg.work_dir, run_id)
-    id = run_id
-    sr.cfg = update_workdir(sr.cfg, id, sr.world_size)
+    sr.cfg.work_dir = os.path.join(sr.cfg.work_dir, f"gpu{sr.world_size}_id{run_id}/")
     if sr.rank == 0:
-        create_folder(sr.cfg.work_dir)
-        save_config('configs/vitsparse/thumos/e2e_thumos_videomae_b_768x1_160_sparse_adapter.py', sr.cfg.work_dir)
+        Path(sr.cfg.work_dir).mkdir(parents=True, exist_ok=True)
 
     # Load annotations
     anns_train, anns_valid = [], []
 
     # Train model
     if use_wandb and sr.rank == 0:
-        run_name = os.path.basename('configs/vitsparse/thumos/e2e_thumos_videomae_b_768x1_160_sparse_adapter.py').split(".")[0] + f"_id{id}"
+        p = Path(sr.cfg.work_dir).parts
+        run_name = sr.database + '_' + p[3].split('_', 2)[2] + '_' + p[4].split('_', 1)[1]
         wandb.init(project=project, name=run_name, config=sr.cfg.to_dict())
     composite.train(anns_train, anns_valid)
     if use_wandb and sr.rank == 0:
