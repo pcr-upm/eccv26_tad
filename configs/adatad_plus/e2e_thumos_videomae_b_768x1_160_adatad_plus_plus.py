@@ -1,7 +1,7 @@
 # AdaTAD++ config: THUMOS-14, VideoMAE ViT-B, 224.
 _base_ = [
-    "../../_base_/datasets/thumos-14/e2e_train_trunc_test_sw_256x224x224.py",  # dataset config
-    "../../_base_/models/actionformer.py",  # model config
+    "../_base_/datasets/thumos-14/e2e_train_trunc_test_sw_256x224x224.py",  # dataset config
+    "../_base_/models/actionformer.py",  # model config
 ]
 
 window_size = 768
