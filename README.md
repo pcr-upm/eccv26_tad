@@ -1,18 +1,45 @@
 # SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection
 
+[![Paper](https://img.shields.io/badge/Paper-ECCV%202026-15375E.svg)](https://link.springer.com/chapter/10.1007/978-3-032-37577-3_30)
+[![DOI](https://img.shields.io/badge/DOI-10.1007%2F978--3--032--37577--3__30-2E6DA4.svg)](https://doi.org/10.1007/978-3-032-37577-3_30)
+
 SV-TAD is an adapter framework for end-to-end temporal action detection (TAD) that, for the first time, lets convolutional adapters operate directly on dynamically pruned token sequences — without reconstructing the dense spatial grid.
 
 **The problem.** Adapter-based fine-tuning freezes a large ViT backbone and trains lightweight convolutional modules, but those modules still process every token. Token selection reduces attention cost, but removes the spatial grid structure that convolutions need, forcing expensive scatter-gather reconstruction that cancels the savings.
 
 **Our solution.** We introduce **SparseConv2D**, a native sparse 2D convolution that replaces the spatial grid with a precomputed *neighbor index table* over the sparse token set. Both forward and backward passes are implemented as custom CUDA kernels whose compute and memory scale linearly with the number of retained tokens.
 
+📄 **Paper:** [SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection](https://link.springer.com/chapter/10.1007/978-3-032-37577-3_30) — *Computer Vision – ECCV 2026*, Lecture Notes in Computer Science, Springer Nature Switzerland, pp. 549–566. [doi:10.1007/978-3-032-37577-3_30](https://doi.org/10.1007/978-3-032-37577-3_30)
+
 If you use this code for your own research, you must reference our conference paper:
 
 ```
-SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection 
+SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection
 Ricardo Pizarro, Roberto Valle, José M. Buenaposada, Luis M. Bergasa, Luis Baumela.
-Proc. European Conference on Computer Vision, ECCV 2026.
+Computer Vision – ECCV 2026, Lecture Notes in Computer Science.
+Springer Nature Switzerland, 2026, pp. 549–566.
+https://doi.org/10.1007/978-3-032-37577-3_30
 ```
+
+<details>
+<summary>BibTeX</summary>
+
+```bibtex
+@inproceedings{pizarro2026svtad,
+  title     = {{SV-TAD}: Native Sparse Convolutions for Efficient Temporal Action Detection},
+  author    = {Pizarro, Ricardo and Valle, Roberto and Buenaposada, Jos\'e M. and
+               Bergasa, Luis M. and Baumela, Luis},
+  booktitle = {Computer Vision -- ECCV 2026},
+  series    = {Lecture Notes in Computer Science},
+  publisher = {Springer Nature Switzerland},
+  year      = {2026},
+  pages     = {549--566},
+  doi       = {10.1007/978-3-032-37577-3_30},
+  isbn      = {978-3-032-37577-3}
+}
+```
+
+</details>
 
 #### Requisites
 **CUDA 11.8** and **cuDNN 9** support — CUDA 11.8 is a requirement of the underlying [OpenTAD](https://github.com/sming256/OpenTAD) library itself.
