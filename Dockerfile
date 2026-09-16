@@ -42,6 +42,6 @@ RUN conda run -n eccv26 pip install --no-cache-dir openmim && conda run -n eccv2
 RUN conda run -n eccv26 pip install --no-cache-dir flash-attn==2.5.4 --no-build-isolation
 # Build and install flash-attention layer_norm extension
 RUN --mount=type=ssh git clone git@github.com:Dao-AILab/flash-attention.git && cd flash-attention && git checkout v2.5.4 && cd csrc/layer_norm && MAX_JOBS=16 conda run -n eccv26 pip install --no-cache-dir --no-build-isolation .
-RUN conda run -n eccv26 pip install --no-cache-dir images-framework torchinfo timm==1.0.24 --no-build-isolation
+RUN conda run -n eccv26 pip install --no-cache-dir pcr-framework torchinfo timm==1.0.24 --no-build-isolation
 ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
 RUN ln -s /usr/lib/x86_64-linux-gnu/libnvcuvid.so.1 /usr/local/cuda/libnvcuvid.so

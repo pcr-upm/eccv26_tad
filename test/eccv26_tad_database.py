@@ -15,10 +15,10 @@ from pathlib import Path
 from opentad.utils import override_dataset_paths
 from opentad.datasets import build_dataset
 from opentad.evaluations import build_evaluator
-from images_framework.src.constants import Modes
-from images_framework.src.datasets import Database
-from images_framework.src.composite import Composite
-from images_framework.src.viewer import Viewer
+from pcr_framework.src.constants import Modes
+from pcr_framework.src.datasets import Database
+from pcr_framework.src.composite import Composite
+from pcr_framework.src.viewer import Viewer
 from src.eccv26_tad import ECCV26TAD
 
 

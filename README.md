@@ -18,14 +18,7 @@ Proc. European Conference on Computer Vision, ECCV 2026.
 **CUDA 11.8** and **cuDNN 9** support — CUDA 11.8 is a requirement of the underlying [OpenTAD](https://github.com/sming256/OpenTAD) library itself.
 `start.sh` installs Python dependencies, builds [decord](https://github.com/dmlc/decord) with CUDA, and compiles the custom CUDA sparse-conv extension (`opentad_sparse_ops`).
 
-| | | | |
-|---|---|---|---|
-| `torch==2.0.1` | `torchvision==0.15.2` | `deepspeed` | `openmim` |
-| `mmcv==2.0.1` | `mmaction2==1.1.0` | `flash-attn==2.5.4` | `images-framework` |
-| `torchinfo` | `timm==1.0.24` | `mmengine` | `wandb` |
-| `scipy` | `einops` | `pandas` | `tqdm` |
-| `ninja` | `imgaug` | `pytorchvideo` | `numpy==1.23.5` |
-| `gdown==5.1.0` | | | |
+The required dependencies are installed in the [`Dockerfile`](./Dockerfile#L39-L47).
 
 #### Usage
 ```

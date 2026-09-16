@@ -12,8 +12,8 @@ import random
 import string
 from pathlib import Path
 from opentad.utils import override_dataset_paths
-from images_framework.src.constants import Modes
-from images_framework.src.composite import Composite
+from pcr_framework.src.constants import Modes
+from pcr_framework.src.composite import Composite
 from src.eccv26_tad import ECCV26TAD
 
 
