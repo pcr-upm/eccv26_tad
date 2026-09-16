@@ -99,8 +99,8 @@ def main():
     composite.load(Modes.TEST)
     if save_video:
         viewer = Viewer('eccv26_tad_test')
-        spec = importlib.util.find_spec('images_framework')
-        output_path = os.path.join('images_framework' if spec is None else os.path.dirname(spec.origin), 'output')
+        spec = importlib.util.find_spec('pcr_framework')
+        output_path = os.path.join('pcr_framework' if spec is None else os.path.dirname(spec.origin), 'output')
         dirname = os.path.join(output_path, 'images/')
         Path(dirname).mkdir(parents=True, exist_ok=True)
 
