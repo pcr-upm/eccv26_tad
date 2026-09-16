@@ -22,7 +22,7 @@ WORKDIR /home/username
 COPY --from=intermediate /eccv26_tad /home/username/eccv26_tad
 LABEL maintainer="roberto.valle@upm.es"
 # Setup conda environment
-RUN wget https://repo.anaconda.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /home/username/miniconda.sh
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /home/username/miniconda.sh
 RUN chmod +x /home/username/miniconda.sh
 RUN /home/username/miniconda.sh -b -p /home/username/conda
 RUN /home/username/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
