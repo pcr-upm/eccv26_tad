@@ -16,7 +16,7 @@ from opentad.utils import override_dataset_paths
 from opentad.datasets import build_dataset
 from opentad.evaluations import build_evaluator
 from pcr_framework.src.constants import Modes
-from pcr_framework.src.datasets import Database
+from pcr_framework.src.datasets import Database, Sources
 from pcr_framework.src.composite import Composite
 from pcr_framework.src.viewer import Viewer
 from src.eccv26_tad import ECCV26TAD
@@ -57,15 +57,16 @@ def parse_options():
 
 def load_annotations(config, load_images=True):
     """
-    Load ground truth annotations from test dataset.
+    Load ground-truth annotations from the specified database source.
     """
+    print(f"Loading dataset from {Sources.TXT}: {config}")
     test_dataset = build_dataset(config)
-    db = 'thumos' if config.type.startswith('Thumos') else 'anet' if config.type.startswith('Anet') else 'attach' if config.type.startswith('Attach') else None
+    ref = 'thumos' if config.type.startswith('Thumos') else 'anet' if config.type.startswith('Anet') else 'attach' if config.type.startswith('Attach') else None
     datasets = [subclass().get_names() for subclass in Database.__subclasses__()]
     idx = [datasets.index(subset) for subset in datasets if db in subset]
-    if len(idx) != 1:
-        raise ValueError('Database does not exist')
-    database = Database.__subclasses__()[idx[0]]()
+    if idx is None:
+        raise ValueError(f'Database is not implemented: {ref}')
+    db = Database.__subclasses__()[idx]()
     # A sliding dataset stores one entry per window, so several entries share the same video
     anns, seen = [], set()
     for entry in tqdm(test_dataset.data_list, file=sys.stdout):
@@ -73,7 +74,7 @@ def load_annotations(config, load_images=True):
         if video_name in seen:
             continue
         seen.add(video_name)
-        anns.append(database.load_filename(test_dataset.data_path, db, (video_name, video_info), load_images))
+        anns.append(db.load_line(Sources.TXT, ref, test_dataset.data_path, (video_name, video_info), load_images))
     return anns
 
 
