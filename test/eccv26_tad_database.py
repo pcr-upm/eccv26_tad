@@ -5,8 +5,7 @@ __email__ = 'roberto.valle@upm.es'
 
 import os
 import sys
-sys.path.append(os.getcwd())
-import cv2
+sys.path.insert(0, os.getcwd())
 import copy
 import wandb
 import importlib.util
@@ -82,7 +81,6 @@ def main():
     """
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test database script.
     """
-    print('OpenCV ' + cv2.__version__)
     unknown, ann_file, class_map, data_root, block_list, external_cls_path, cfg_options, save_video = parse_options()
 
     # Load vision components
@@ -119,7 +117,7 @@ def main():
         video_name = sr.get_video_id(pred.filename)
         result_dict['results'].setdefault(video_name, [])
         for action in pred.actions:
-            result_dict["results"][video_name].append({'segment': list(action.segment), 'label': label_names[action.label], 'score': float(action.score)})
+            result_dict["results"][video_name].append({'segment': list(action.segment), 'label': label_names[action.label.name], 'score': float(action.label.confidence)})
         if save_video:
             for img_pred in pred.images:
                 viewer.set_image(img_pred)

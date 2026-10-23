@@ -5,7 +5,7 @@ __email__ = 'roberto.valle@upm.es'
 
 import os
 import sys
-sys.path.append(os.getcwd())
+sys.path.insert(0, os.getcwd())
 import cv2
 import copy
 import tempfile
@@ -73,7 +73,6 @@ def main():
     """
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection test video script.
     """
-    print('OpenCV ' + cv2.__version__)
     unknown, input_data, thresh, topk, data_root, external_cls_path, cfg_options, save_video = parse_options()
 
     # Load vision components
@@ -150,7 +149,7 @@ def main():
         for action in ann.actions:
             s, e = action.segment
             print(f"  {s:>8.2f}  {e:>8.2f}  {action.label.name}")
-    shown = [action for action in pred.actions if action.score >= thresh]
+    shown = [action for action in pred.actions if action.label.confidence >= thresh]
     if topk >= 0:
         shown = shown[: topk]
     print(
@@ -164,7 +163,7 @@ def main():
         print(f"  {'-'*8}  {'-'*8}  {'-'*7}  {'-'*20}")
         for action in shown:
             s, e = action.segment
-            print(f"  {s:>8.2f}  {e:>8.2f}  {action.score:>7.4f}  {action.label.name}")
+            print(f"  {s:>8.2f}  {e:>8.2f}  {action.label.confidence:>7.4f}  {action.label.name}")
     print('End of eccv26_tad_test')
 
 

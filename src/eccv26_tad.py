@@ -372,7 +372,7 @@ class ECCV26TAD(Recognition):
         video_info["frame"] = frame
         video_info["duration"] = duration
         # Needed by get_gt() when the dataset's pipeline requires real gt_segments/gt_labels even at test time (e.g. ATTACH, whose config doesn't set test_mode=True)
-        video_info["annotations"] = [{'segment': list(action.segment), 'label': self.class_map[list(categories.values()).index(action.label)]} for action in ann.actions]
+        video_info["annotations"] = [{'segment': list(action.segment), 'label': self.class_map[list(categories.values()).index(action.label.name)]} for action in ann.actions]
         test_dataset = ExampleDataset(video_name=video_name, video_info=video_info, data_path=data_path, pipeline=test_cfg.pipeline, class_map=self.class_map, cfg_test=test_cfg)
         # Build dataloader with custom collate that moves to device
         sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, num_replicas=self.world_size, rank=self.rank, shuffle=False, drop_last=False)
@@ -392,4 +392,4 @@ class ECCV26TAD(Recognition):
             for video_name, actions in data['results'].items():
                 for action in actions:
                     label = categories[self.class_map.index(action["label"])]
-                    pred.add_action(TemporalCategory(label=label, segment=tuple(action["segment"]), score=action["score"]))
+                    pred.add_action(TemporalCategory(label=label, segment=tuple(action["segment"]), label_confidence=action["score"]))

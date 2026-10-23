@@ -5,8 +5,7 @@ __email__ = 'roberto.valle@upm.es'
 
 import os
 import sys
-sys.path.append(os.getcwd())
-import cv2
+sys.path.insert(0, os.getcwd())
 import wandb
 import random
 import string
@@ -57,7 +56,6 @@ def main():
     """
     SV-TAD: Native Sparse Convolutions for Efficient Temporal Action Detection train database script.
     """
-    print('OpenCV ' + cv2.__version__)
     unknown, use_wandb, project, ann_file, class_map, data_root, block_list, external_cls_path, cfg_options = parse_options()
 
     # Load vision components

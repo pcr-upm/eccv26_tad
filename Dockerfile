@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # This is our first build stage, it will not persist in the final image
-FROM ubuntu as intermediate
+FROM ubuntu AS intermediate
 RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p -m 0700 /root/.ssh && ssh-keyscan github.com >> /root/.ssh/known_hosts
 # Download the computer vision framework
@@ -11,9 +11,7 @@ ADD data /eccv26_tad/data
 # Copy the repository from the previous image
 FROM pytorch/pytorch:2.6.0-cuda11.8-cudnn9-devel
 USER 0
-ENV DEBIAN_FRONTEND=noninteractive
-ENV LANG=C.UTF-8
-ENV TZ=Europe/Madrid
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 TZ=Europe/Madrid
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsm6 libxext6 build-essential git wget openssh-client software-properties-common libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libavdevice-dev && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p -m 0700 /root/.ssh && ssh-keyscan github.com >> /root/.ssh/known_hosts
@@ -32,7 +30,7 @@ RUN /home/username/conda/bin/conda install -n base conda-libmamba-solver
 RUN /home/username/conda/bin/conda config --set solver libmamba 
 RUN /home/username/conda/bin/conda create -n eccv26 python=3.10.12
 # Activate conda environment
-ENV PATH /home/username/conda/envs/eccv26/bin:/home/username/conda/bin:$PATH
+ENV PATH=/home/username/conda/envs/eccv26/bin:/home/username/conda/bin:${PATH}
 # Make RUN commands use the new environment (source activate eccv26)
 SHELL ["conda", "run", "-n", "eccv26", "/bin/bash", "-c"]
 # Install dependencies
