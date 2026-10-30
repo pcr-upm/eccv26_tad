@@ -45,7 +45,7 @@ https://doi.org/10.1007/978-3-032-37577-3_30
 **CUDA 11.8** and **cuDNN 9** support — CUDA 11.8 is a requirement of the underlying [OpenTAD](https://github.com/sming256/OpenTAD) library itself.
 `start.sh` installs Python dependencies, builds [decord](https://github.com/dmlc/decord) with CUDA, and compiles the custom CUDA sparse-conv extension (`opentad_sparse_ops`).
 
-The required dependencies are installed in the [`Dockerfile`](./Dockerfile#L39-L47).
+The required dependencies are installed in the [`Dockerfile`](./Dockerfile#L37-L45).
 
 #### Usage
 ```
